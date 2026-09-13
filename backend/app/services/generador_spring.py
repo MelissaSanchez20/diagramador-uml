@@ -25,6 +25,18 @@ Limitaciones conocidas (ver también el mensaje que acompañó esta implementaci
 - `Relacion.etiqueta` no se usa para nombrar campos/columnas de la relación
   (es un texto libre para el diagrama, ej. "vive en", no un nombre de rol
   por extremo) — el nombre de campo siempre sale de la clase destino.
+- Un atributo del diagrama llamado "id" (cualquier variación de mayúsculas)
+  se ignora al generar columnas: el `@Id` autogenerado ya existe siempre y
+  un `@Column` adicional con el mismo nombre de campo no compila.
+- Tipo de atributo no reconocido (typo, tipo custom no soportado): NO se
+  valida al guardar el diagrama (CU09) — `tipo` sigue siendo texto libre a
+  propósito, porque el diagrama es de modelado general y no todo atributo
+  tiene por qué mapear a un tipo Java primitivo (puede referenciar otra
+  clase, ser una idea a medio definir, etc.); exigir un tipo válido ahí
+  limitaría el modelado por el bien de un solo consumidor opcional (CU08).
+  En cambio, el generador defaultea a String como siempre pero deja un
+  comentario `// tipo UML "..." no reconocido, se usó String por defecto`
+  arriba del campo, visible al revisar el .java antes de usarlo.
 """
 
 from __future__ import annotations
@@ -84,6 +96,14 @@ def mapear_tipo_java(tipo_uml: str | None) -> str:
     if not tipo_uml:
         return TIPO_JAVA_POR_DEFECTO
     return MAPEO_TIPOS_JAVA.get(tipo_uml.strip().lower(), TIPO_JAVA_POR_DEFECTO)
+
+
+def tipo_no_reconocido(tipo_uml: str | None) -> bool:
+    """True si se escribió un tipo que no está en MAPEO_TIPOS_JAVA (typo,
+    tipo custom no soportado, etc.). No cuenta el caso de no especificar
+    tipo (`None`/vacío) — ahí el default a String es el comportamiento
+    esperado, no un error silencioso."""
+    return bool(tipo_uml) and tipo_uml.strip().lower() not in MAPEO_TIPOS_JAVA
 
 
 # --------------------------------------------------------------------------
@@ -177,6 +197,7 @@ class CampoAtributo:
     nombre_campo: str
     tipo_java: str
     columna: str
+    aviso: str | None = None
 
 
 @dataclass
@@ -329,6 +350,8 @@ def _renderizar_entidad(datos: DatosEntidad, paquete_base: str) -> str:
         "",
     ]
     for a in datos.atributos:
+        if a.aviso:
+            cuerpo.append(f"    // {a.aviso}")
         cuerpo.append(f'    @Column(name = "{a.columna}")')
         cuerpo.append(f"    private {a.tipo_java} {a.nombre_campo};")
         cuerpo.append("")
@@ -574,8 +597,19 @@ def generar_zip_backend(proyecto: Proyecto, clases: list[ClaseUml], relaciones: 
                     nombre_campo=nombre_campo_java(a.nombre),
                     tipo_java=mapear_tipo_java(a.tipo),
                     columna=a_snake_case(nombre_campo_java(a.nombre)),
+                    aviso=(
+                        f'tipo UML "{a.tipo}" no reconocido, se usó String por defecto'
+                        if tipo_no_reconocido(a.tipo)
+                        else None
+                    ),
                 )
                 for a in sorted(c.atributos, key=lambda a: a.orden)
+                # El @Id autogenerado (GenerationType.IDENTITY) ya cubre esto.
+                # Si el atributo del diagrama también se llama "id" (en
+                # cualquier variación de mayúsculas, o algo que sanea a "id",
+                # ej. "I D") se ignora del todo — si no, quedan dos campos
+                # Java llamados "id" en la misma clase y no compila.
+                if nombre_campo_java(a.nombre).lower() != "id"
             ]
             datos_entidad = DatosEntidad(
                 clase=c,

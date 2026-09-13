@@ -36,6 +36,18 @@ class UsuarioOut(UsuarioBase):
     fecha_registro: datetime
 
 
+class UsuarioBusquedaOut(BaseModel):
+    """CU06 — resultado de búsqueda: sin `fecha_registro` (no aporta al
+    flujo de elegir un colaborador y no hace falta exponerla ahí)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    nombre_completo: str
+    email: EmailStr
+    rol: RolUsuario
+
+
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"

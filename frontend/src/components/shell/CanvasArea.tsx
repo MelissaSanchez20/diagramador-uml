@@ -17,11 +17,13 @@ import type {
 
 import { ClassNode } from './ClassNode'
 import type { ClassNodeData } from './ClassNode'
+import { RelacionEdge } from './RelacionEdge'
 import type { EdgeData } from './useDiagrama'
 import { UmlMarkers } from './UmlMarkers'
 import './diagram.css'
 
 const nodeTypes = { classNode: ClassNode }
+const edgeTypes = { relacion: RelacionEdge }
 
 type Props = {
   nodes: Node<ClassNodeData>[]
@@ -65,6 +67,7 @@ export function CanvasArea({
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeDragStop={onNodeDragStop}

@@ -44,6 +44,14 @@ export type Colaborador = {
   usuario: Usuario
 }
 
+/** CU06 — resultado de búsqueda de usuarios (sin fecha_registro). */
+export type UsuarioBusqueda = {
+  id: number
+  nombre_completo: string
+  email: string
+  rol: RolUsuario
+}
+
 export type Token = {
   access_token: string
   token_type: string

@@ -1,9 +1,13 @@
 import io
+import re
 import zipfile
+
+import pytest
 
 from app.models.atributo import Atributo, VisibilidadMiembro
 from app.models.clase_uml import ClaseUml
 from app.models.relacion import Relacion, TipoRelacion
+from app.services.generador_spring import mapear_tipo_java
 
 
 def _crear_diagrama_persona_direccion(db_session, proyecto):
@@ -175,3 +179,111 @@ def test_generar_backend_composicion_agrega_cascade_y_orphan_removal_en_el_padre
     item_java = next(n for n in zf.namelist() if n.endswith("model/Item.java"))
     contenido_item = zf.read(item_java).decode("utf-8")
     assert "orphanRemoval" not in contenido_item
+
+
+# --------------------------------------------------------------------------
+# BUG 1 (crítico): un atributo del diagrama llamado "id" no debe duplicar
+# el campo Java del @Id autogenerado.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("nombre_atributo", ["id", "ID", "Id", "iD", " id "])
+def test_atributo_llamado_id_no_duplica_el_campo_autogenerado(
+    client, crear_usuario, crear_proyecto, headers, db_session, nombre_atributo
+):
+    admin = crear_usuario()
+    proyecto = crear_proyecto(admin)
+
+    libro = ClaseUml(id="libro-id", id_proyecto=proyecto.id, nombre="Libro", es_abstracta=False, pos_x=0, pos_y=0)
+    libro.atributos = [
+        Atributo(id="attr-id", nombre=nombre_atributo, tipo="string", visibilidad=VisibilidadMiembro.PRIVADO, orden=0),
+        Atributo(id="attr-titulo", nombre="titulo", tipo="string", visibilidad=VisibilidadMiembro.PRIVADO, orden=1),
+    ]
+    db_session.add(libro)
+    db_session.commit()
+
+    resp = client.post(f"/proyectos/{proyecto.id}/generar-backend", headers=headers(admin))
+    assert resp.status_code == 200
+
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    libro_java = next(n for n in zf.namelist() if n.endswith("model/Libro.java"))
+    contenido = zf.read(libro_java).decode("utf-8")
+
+    # Exactamente un campo "id" (el autogenerado) — ninguno más, sea cual
+    # sea el tipo Java que hubiera tenido el atributo "id" del diagrama.
+    ocurrencias_campo_id = re.findall(r"private \w+(?:<\w+>)? id;", contenido)
+    assert len(ocurrencias_campo_id) == 1
+    assert "private String id;" not in contenido
+    assert contenido.count("@Column") == 1  # solo "titulo"; "id" no generó @Column
+
+
+# --------------------------------------------------------------------------
+# BUG 2: auditoría del mapeo de tipos UML -> Java, uno por uno.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("tipo_uml", "tipo_java_esperado"),
+    [
+        ("string", "String"),
+        ("str", "String"),
+        ("texto", "String"),
+        ("char", "String"),
+        ("int", "Integer"),
+        ("integer", "Integer"),
+        ("entero", "Integer"),
+        ("long", "Long"),
+        ("float", "Double"),
+        ("double", "Double"),
+        ("decimal", "BigDecimal"),
+        ("bigdecimal", "BigDecimal"),
+        ("boolean", "Boolean"),
+        ("bool", "Boolean"),
+        ("date", "LocalDate"),
+        ("fecha", "LocalDate"),
+        ("datetime", "LocalDateTime"),
+        ("fechahora", "LocalDateTime"),
+        ("timestamp", "LocalDateTime"),
+        ("uuid", "UUID"),
+        # Mayúsculas / espacios no deberían importar.
+        ("STRING", "String"),
+        ("  Boolean  ", "Boolean"),
+        # Sin tipo especificado -> default String (comportamiento esperado, no un bug).
+        (None, "String"),
+        ("", "String"),
+        # Tipo no reconocido -> también cae a String (ver test de aviso abajo).
+        ("un-tipo-inventado", "String"),
+    ],
+)
+def test_mapeo_de_tipos_uml_a_java(tipo_uml, tipo_java_esperado):
+    assert mapear_tipo_java(tipo_uml) == tipo_java_esperado
+
+
+def test_tipo_no_reconocido_deja_comentario_visible_en_vez_de_fallar_en_silencio(
+    client, crear_usuario, crear_proyecto, headers, db_session
+):
+    admin = crear_usuario()
+    proyecto = crear_proyecto(admin)
+
+    libro = ClaseUml(id="libro-id", id_proyecto=proyecto.id, nombre="Libro", es_abstracta=False, pos_x=0, pos_y=0)
+    libro.atributos = [
+        Atributo(
+            id="attr-raro",
+            nombre="paginas",
+            tipo="numerico-raro",
+            visibilidad=VisibilidadMiembro.PRIVADO,
+            orden=0,
+        )
+    ]
+    db_session.add(libro)
+    db_session.commit()
+
+    resp = client.post(f"/proyectos/{proyecto.id}/generar-backend", headers=headers(admin))
+    assert resp.status_code == 200
+
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    libro_java = next(n for n in zf.namelist() if n.endswith("model/Libro.java"))
+    contenido = zf.read(libro_java).decode("utf-8")
+
+    assert 'tipo UML "numerico-raro" no reconocido' in contenido
+    assert "private String paginas;" in contenido

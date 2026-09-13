@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
-from app.routers import auth, diagramas, generacion, proyectos, usuarios
+from app.routers import auth, colaboradores, diagramas, generacion, proyectos, usuarios
 
 app = FastAPI(title=settings.PROJECT_NAME)
 
@@ -24,6 +24,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(usuarios.router)
 app.include_router(proyectos.router)
+app.include_router(colaboradores.router)
 app.include_router(diagramas.router)
 app.include_router(generacion.router)
 

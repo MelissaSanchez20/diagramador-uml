@@ -7,25 +7,10 @@ from app.models.proyecto import Proyecto
 from app.models.proyecto_colaborador import ProyectoColaborador
 from app.models.usuario import RolUsuario, Usuario
 from app.routers.auth import get_current_user
-from app.schemas.colaborador import ColaboradorAsignar, ColaboradorOut
 from app.schemas.proyecto import ProyectoCreate, ProyectoOut, ProyectoUpdate
+from app.services.acceso import obtener_proyecto_propio
 
 router = APIRouter(prefix="/proyectos", tags=["proyectos"])
-
-
-def _obtener_proyecto_propio(proyecto_id: int, usuario: Usuario, db: Session) -> Proyecto:
-    proyecto = db.get(Proyecto, proyecto_id)
-    if proyecto is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Proyecto no encontrado",
-        )
-    if proyecto.id_administrador != usuario.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No eres el administrador de este proyecto",
-        )
-    return proyecto
 
 
 def _nombre_duplicado(
@@ -100,7 +85,7 @@ def actualizar_proyecto(
     db: Session = Depends(get_db),
 ) -> Proyecto:
     """CU04 - Edita un proyecto propio."""
-    proyecto = _obtener_proyecto_propio(proyecto_id, usuario_actual, db)
+    proyecto = obtener_proyecto_propio(proyecto_id, usuario_actual, db)
 
     if datos.nombre is not None and datos.nombre != proyecto.nombre:
         if _nombre_duplicado(datos.nombre, usuario_actual.id, db, excluir_id=proyecto.id):
@@ -130,7 +115,7 @@ def eliminar_proyecto(
 
     Si tiene colaboradores activos, exige `?confirmar=true`; si no, responde 409.
     """
-    proyecto = _obtener_proyecto_propio(proyecto_id, usuario_actual, db)
+    proyecto = obtener_proyecto_propio(proyecto_id, usuario_actual, db)
 
     colaboradores_activos = db.scalar(
         select(func.count())
@@ -150,105 +135,4 @@ def eliminar_proyecto(
         )
 
     db.delete(proyecto)
-    db.commit()
-
-
-@router.post(
-    "/{proyecto_id}/colaboradores",
-    response_model=ColaboradorOut,
-    status_code=status.HTTP_201_CREATED,
-)
-def agregar_colaborador(
-    proyecto_id: int,
-    datos: ColaboradorAsignar,
-    usuario_actual: Usuario = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> ProyectoColaborador:
-    """CU04 - Agrega un colaborador al proyecto por email de un usuario existente."""
-    proyecto = _obtener_proyecto_propio(proyecto_id, usuario_actual, db)
-
-    usuario_colaborador = db.scalar(select(Usuario).where(Usuario.email == datos.email))
-    if usuario_colaborador is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No existe un usuario registrado con ese email",
-        )
-
-    if usuario_colaborador.id == usuario_actual.id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No puedes agregarte a ti mismo como colaborador de tu propio proyecto",
-        )
-
-    colaborador = db.scalar(
-        select(ProyectoColaborador).where(
-            ProyectoColaborador.id_proyecto == proyecto.id,
-            ProyectoColaborador.id_usuario == usuario_colaborador.id,
-        )
-    )
-    if colaborador is not None:
-        if colaborador.activo:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Ese usuario ya es colaborador del proyecto",
-            )
-        colaborador.activo = True
-        colaborador.fecha_asignacion = func.now()
-    else:
-        colaborador = ProyectoColaborador(
-            id_proyecto=proyecto.id,
-            id_usuario=usuario_colaborador.id,
-            activo=True,
-        )
-        db.add(colaborador)
-
-    db.commit()
-    db.refresh(colaborador)
-    return colaborador
-
-
-@router.get("/{proyecto_id}/colaboradores", response_model=list[ColaboradorOut])
-def listar_colaboradores(
-    proyecto_id: int,
-    usuario_actual: Usuario = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> list[ProyectoColaborador]:
-    """CU04 - Lista los colaboradores activos de un proyecto propio."""
-    proyecto = _obtener_proyecto_propio(proyecto_id, usuario_actual, db)
-    return list(
-        db.scalars(
-            select(ProyectoColaborador).where(
-                ProyectoColaborador.id_proyecto == proyecto.id,
-                ProyectoColaborador.activo.is_(True),
-            )
-        )
-    )
-
-
-@router.delete(
-    "/{proyecto_id}/colaboradores/{colaborador_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
-def quitar_colaborador(
-    proyecto_id: int,
-    colaborador_id: int,
-    usuario_actual: Usuario = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> None:
-    """CU04 - Quita (soft delete) un colaborador de un proyecto propio."""
-    proyecto = _obtener_proyecto_propio(proyecto_id, usuario_actual, db)
-
-    colaborador = db.scalar(
-        select(ProyectoColaborador).where(
-            ProyectoColaborador.id == colaborador_id,
-            ProyectoColaborador.id_proyecto == proyecto.id,
-        )
-    )
-    if colaborador is None or not colaborador.activo:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Colaborador no encontrado en este proyecto",
-        )
-
-    colaborador.activo = False
     db.commit()

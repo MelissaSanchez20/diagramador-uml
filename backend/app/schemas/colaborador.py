@@ -1,12 +1,15 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict
 
 from app.schemas.usuario import UsuarioOut
 
 
 class ColaboradorAsignar(BaseModel):
-    email: EmailStr
+    """CU05 — se agrega por id (resuelto vía la búsqueda de CU06), no por
+    email: evita que alguien intente "invitar" a un email no registrado."""
+
+    usuario_id: int
 
 
 class ColaboradorOut(BaseModel):

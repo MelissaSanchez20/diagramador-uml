@@ -246,14 +246,29 @@
   stroke: var(--accent);
 }
 
-.app-canvas .react-flow__edge-text {
-  font-family: var(--font-sans);
+/* Etiquetas de arista custom (RelacionEdge.tsx) — reemplazan el label SVG
+   de fábrica de React Flow, que no soporta más de una etiqueta por arista. */
+.edge-multiplicidad {
+  position: absolute;
+  padding: 0 3px;
+  font-family: var(--font-mono);
   font-size: 10px;
-  fill: var(--text-secondary);
+  color: var(--text-secondary);
+  background: var(--canvas-bg);
+  pointer-events: none;
+  white-space: nowrap;
 }
 
-.app-canvas .react-flow__edge-textbg {
-  fill: var(--bg-base);
+.edge-etiqueta {
+  position: absolute;
+  padding: 1px 4px;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: var(--canvas-bg);
+  border-radius: 2px;
+  pointer-events: none;
+  white-space: nowrap;
 }
 
 /* defs SVG de los marcadores: fuera de flujo, sin ocupar espacio */

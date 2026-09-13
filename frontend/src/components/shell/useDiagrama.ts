@@ -72,7 +72,7 @@ function construirAristas(relaciones: RelacionUml[]): Edge<EdgeData>[] {
     target: r.id_clase_destino,
     sourceHandle: r.handle_origen ?? undefined,
     targetHandle: r.handle_destino ?? undefined,
-    type: 'smoothstep',
+    type: 'relacion',
     label: r.etiqueta ?? undefined,
     style: EDGE_STYLE,
     data: {
@@ -287,7 +287,7 @@ export function useDiagrama(proyectoId: number) {
           target: conexion.target!,
           sourceHandle: conexion.sourceHandle ?? undefined,
           targetHandle: conexion.targetHandle ?? undefined,
-          type: 'smoothstep',
+          type: 'relacion',
           label: detalles.etiqueta ?? undefined,
           style: EDGE_STYLE,
           data: detalles,

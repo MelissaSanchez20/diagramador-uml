@@ -31,7 +31,7 @@ backend/app/
   db/session.py      # engine, SessionLocal, Base, get_db()
   models/            # usuario, proyecto, proyecto_colaborador, clase_uml, atributo, metodo, relacion
   schemas/           # usuario, proyecto, colaborador, diagrama
-  routers/           # auth, usuarios, proyectos, diagramas, generacion
+  routers/           # auth, usuarios, proyectos, colaboradores, diagramas, generacion
   services/          # acceso.py (control de acceso a proyecto compartido), generador_spring.py (CU08)
 backend/alembic/     # migraciones
 ```
@@ -42,7 +42,7 @@ backend/alembic/     # migraciones
 - `app/core/security.py`: hash/verificación de contraseñas y creación/decodificación de tokens.
 - `app/routers/auth.py`: `POST /auth/login` (form OAuth2, el campo `username` es el email) + dependencia reutilizable `get_current_user` para proteger endpoints.
 - `app/routers/usuarios.py`: `GET`/`PUT /usuarios/me` (CU03).
-- `app/routers/proyectos.py`: CRUD de proyectos (CU04); solo el administrador dueño modifica/elimina; `DELETE` con colaboradores activos exige `?confirmar=true` (si no, 409).
+- `app/routers/proyectos.py`: CRUD de proyectos (CU04); solo el administrador dueño modifica/elimina; `DELETE` con colaboradores activos exige `?confirmar=true` (si no, 409). La gestión de colaboradores vive en `app/routers/colaboradores.py` (CU05/CU06, ver sección propia abajo).
 - Config en `.env`: `SECRET_KEY`, `ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES`, `CORS_ORIGINS` — ver `.env.example`.
 - Logout (CU02) es solo del lado del cliente (descartar el token); no hay endpoint ni blocklist.
 - `POST /auth/registro` (público): crea un usuario nuevo (rol `ADMINISTRADOR` siempre) y devuelve `Token` como el login. Frontend: `RegistroPage.tsx` / ruta `/registro`. El seed sigue siendo la forma de crear el primer usuario en una BD vacía.
@@ -63,13 +63,22 @@ Convenciones: nombres de tablas/campos en **español**, claves foráneas como `i
 - `app/routers/diagramas.py`: `GET`/`PUT /proyectos/{id}/diagrama`, accesible al administrador dueño del proyecto o a un colaborador activo.
 - El `PUT` reemplaza el diagrama completo (borra todas las clases/relaciones del proyecto y reinserta lo recibido) — no hay edición incremental por campo. El frontend lo usa como autoguardado (ver `useDiagrama.ts`).
 - `app/schemas/diagrama.py`: `DiagramaIO` (`clases: ClaseIO[]`, `relaciones: RelacionIO[]`), con `AtributoIO`/`MetodoIO` anidados en `ClaseIO`.
-- `app/services/acceso.py`: `obtener_proyecto_con_acceso` (dueño o colaborador activo) — compartida con CU08.
+- `app/services/acceso.py`: `obtener_proyecto_con_acceso` (dueño o colaborador activo, CU09/CU08/CU05-GET) y `obtener_proyecto_propio` (solo el administrador dueño, CU04/CU05-POST/DELETE).
+
+### Búsqueda de usuarios y gestión de colaboradores (CU06/CU05) — backend + frontend implementados
+
+- `GET /usuarios/buscar?q=&proyecto_id=` (`app/routers/usuarios.py`): busca por `nombre_completo`/`email` (parcial, sin distinguir mayúsculas; `q` vacío devuelve `[]`). Nunca incluye a quien busca; con `proyecto_id` tampoco a sus colaboradores activos, y exige que quien busca tenga acceso a ese proyecto (dueño o colaborador activo vía `obtener_proyecto_con_acceso`) — si no, 403, para que no se pueda inferir quiénes son colaboradores de un proyecto ajeno probando ids.
+- `app/routers/colaboradores.py` (`/proyectos/{id}/colaboradores`, movido fuera de `proyectos.py`): `GET` (dueño o colaborador activo), `POST {usuario_id}` y `DELETE /{usuario_id}` (**solo** el administrador dueño — `obtener_proyecto_propio`, no el genérico). `POST` reactiva (`activo=true`, `fecha_asignacion` actualizada) si la fila ya existía inactiva, en vez de duplicarla (constraint única `id_proyecto`+`id_usuario`). `DELETE` es soft-delete.
+- **Cambio de contrato respecto al CU04 original**: antes se agregaba por `email` y se quitaba por el `id` de la fila `ProyectoColaborador`; ahora se agrega/quita por `usuario_id` (resuelto vía la búsqueda de CU06).
+- Frontend: `ColaboradoresModal.tsx` reescrito — buscador con debounce (300ms) que llama a `GET /usuarios/buscar` con `proyecto_id` de contexto, resultados como lista clicable (nombre + email + "Agregar"/"Agregando…"), quitar usa `colaborador.usuario.id` (no el id de la fila). `api/usuarios.ts::buscarUsuarios`, `api/colaboradores.ts` actualizado al nuevo contrato.
+- Tests en `backend/tests/test_colaboradores.py`.
 
 ### Generación de backend Spring Boot (CU08) — backend + frontend implementados
 
 - `app/routers/generacion.py`: `POST /proyectos/{id}/generar-backend`, mismo control de acceso que CU09; 400 si el proyecto no tiene clases todavía. Devuelve un `.zip` (proyecto Maven completo) como `StreamingResponse`.
 - `app/services/generador_spring.py`: arma el `.zip` a partir de `clases_uml`/`atributos`/`relaciones` — entidades JPA (`@Entity`/`@Table`/`@Column`, Lombok `@Getter/@Setter`), `Repository`/`Service`/`Controller` (CRUD, rutas `/api/{plural}`), `pom.xml` (Spring Boot 3.2.5, Java 17) y `application.properties` de plantilla (sin JWT todavía). Mapeo de tipos UML→Java y de multiplicidad→anotación JPA documentados en el encabezado del módulo.
-- Limitaciones conocidas: `HERENCIA` se mapea como asociación simple (sin `@Inheritance`); `es_abstracta` se ignora; pluralización heurística (no perfecta para irregulares); `orphanRemoval` se coloca en el lado `@OneToMany` real (no en el dueño/FK como decía la consigna original, porque JPA no permite ese atributo en `@ManyToOne`/`@ManyToMany` — confirmado correcto); los métodos UML no se generan. Tests en `backend/tests/test_generador_spring.py`.
+- Limitaciones conocidas: `HERENCIA` se mapea como asociación simple (sin `@Inheritance`); `es_abstracta` se ignora; pluralización heurística (no perfecta para irregulares); `orphanRemoval` se coloca en el lado `@OneToMany` real (no en el dueño/FK como decía la consigna original, porque JPA no permite ese atributo en `@ManyToOne`/`@ManyToMany` — confirmado correcto); los métodos UML no se generan.
+- Un atributo del diagrama llamado "id" (cualquier variación de mayúsculas) se ignora al generar columnas — si no, chocaba con el `@Id` autogenerado (dos campos Java "id", no compila). Un tipo de atributo no reconocido (typo, tipo custom) no se valida al guardar el diagrama a propósito (`tipo` es texto libre de modelado general); el generador defaultea a `String` mostrando un comentario `// tipo UML "..." no reconocido` en el `.java`, en vez de fallar en silencio. Tests en `backend/tests/test_generador_spring.py` (incluye auditoría 1:1 de `MAPEO_TIPOS_JAVA`).
 - CORS: `expose_headers=["Content-Disposition"]` en `main.py` — sin esto el navegador oculta ese header a JS y el frontend no puede leer el nombre real del `.zip` a descargar.
 - Frontend: botón "Generar backend" en `Toolbar.tsx` (visible a cualquiera con acceso al proyecto, no solo al admin), con estado de carga ("Generando…", botón deshabilitado) y banner de error dismisseable (`app/api/generacion.ts` extrae el `detail` del error aunque la respuesta venga como `Blob` por el `responseType: 'blob'`).
 
@@ -80,8 +89,10 @@ Casos de uso, todos con **autenticación JWT**:
 - **CU01** — Login — *backend + frontend hechos*
 - **CU02** — Logout — *solo cliente (descartar token)* — hecho
 - **CU03** — Perfil de usuario — *backend + frontend hechos* (`GET`/`PUT /usuarios/me`)
-- **CU04** — Gestión de proyectos (CRUD) — *backend + frontend hechos*, incluida la asignación de colaboradores (`POST`/`GET`/`DELETE /proyectos/{id}/colaboradores`, `ColaboradoresModal.tsx`).
-- **CU09** — Editor de diagrama de clases (React Flow) — *backend + frontend hechos*. En `/proyectos/:id`: crear/editar/eliminar clases con atributos, métodos, estereotipo y abstracción (arrastrables desde el grip superior del nodo; posición inicial en grilla, sin superponerse); relaciones tipadas (asociación/herencia/agregación/composición) con etiqueta y multiplicidad (`1`/`0..1`/`0..*`/`1..*`, select en el modal); autoguardado con debounce y reintento visible si falla el guardado. `guardar_diagrama` valida nombres de clase duplicados (409), que las relaciones solo referencien clases del propio payload (400) y que la multiplicidad sea una de las 4 válidas (400). Tests en `backend/tests/test_diagramas.py`.
+- **CU04** — Gestión de proyectos (CRUD) — *backend + frontend hechos*.
+- **CU06** — Búsqueda de usuarios registrados — *backend + frontend hechos*. `GET /usuarios/buscar`.
+- **CU05** — Gestión de integrantes/colaboradores (`<<include>>` CU06) — *backend + frontend hechos*. `app/routers/colaboradores.py` + `ColaboradoresModal.tsx` (buscador con debounce en vez de campo de email).
+- **CU09** — Editor de diagrama de clases (React Flow) — *backend + frontend hechos*. En `/proyectos/:id`: crear/editar/eliminar clases con atributos, métodos, estereotipo y abstracción (arrastrables desde el grip superior del nodo; posición inicial en grilla, sin superponerse); relaciones tipadas (asociación/herencia/agregación/composición) con etiqueta y multiplicidad (`1`/`0..1`/`0..*`/`1..*`, select en el modal) **visibles en el lienzo** cerca de cada extremo de la línea (`RelacionEdge.tsx`, edge custom — los edges de fábrica de React Flow solo soportan una etiqueta centrada); autoguardado con debounce y reintento visible si falla el guardado. `guardar_diagrama` valida nombres de clase duplicados (409), que las relaciones solo referencien clases del propio payload (400) y que la multiplicidad sea una de las 4 válidas (400). Tests en `backend/tests/test_diagramas.py`.
 - **CU08** — Generación de backend Spring Boot — *backend + frontend hechos*. Botón "Generar backend" en la toolbar del editor descarga el `.zip` (ver la sección de arriba para el detalle y las limitaciones conocidas).
 
 ### Pendiente (ciclos posteriores)
@@ -118,9 +129,9 @@ npm run lint      # oxlint
 - Sistema de diseño: `src/styles/tokens.css` (variables CSS) + `src/components/ui/`
   (`Button`, `TextField`, `Modal`, `Banner`). Estética "mesa de dibujo técnico".
 - Editor de diagrama (CU09): `src/components/shell/` (`AppShell`, `CanvasArea`, `ClassNode`,
-  `Sidebar`, `Toolbar`, `RelacionEditorModal`, `umlFormat.ts`, `UmlMarkers.tsx`) + hook
+  `Sidebar`, `Toolbar`, `RelacionEditorModal`, `RelacionEdge.tsx`, `umlFormat.ts`, `UmlMarkers.tsx`) + hook
   `useDiagrama.ts` (estado de React Flow, autoguardado). `src/pages/ColaboradoresModal.tsx`
-  gestiona colaboradores de CU04.
+  gestiona colaboradores (CU05, con buscador de CU06) — ver sección de CU05/CU06 arriba.
 
 ## Notas para trabajar en este repo
 
