@@ -15,6 +15,7 @@ export function getApiErrorMessage(err: unknown, fallback = 'Ocurrió un error i
     }
     if (err.code === 'ERR_NETWORK') return 'No se pudo conectar con el servidor'
   }
+  if (err instanceof Error && err.message) return err.message
   return fallback
 }
 

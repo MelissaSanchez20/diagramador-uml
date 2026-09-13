@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
-from app.routers import auth, diagramas, proyectos, usuarios
+from app.routers import auth, diagramas, generacion, proyectos, usuarios
 
 app = FastAPI(title=settings.PROJECT_NAME)
 
@@ -15,12 +15,17 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Sin esto el navegador oculta Content-Disposition a JS (no está en la
+    # lista de headers "seguros" por defecto de CORS) — lo necesita
+    # generacion.py (CU08) para nombrar el .zip descargado.
+    expose_headers=["Content-Disposition"],
 )
 
 app.include_router(auth.router)
 app.include_router(usuarios.router)
 app.include_router(proyectos.router)
 app.include_router(diagramas.router)
+app.include_router(generacion.router)
 
 
 @app.get("/")

@@ -31,8 +31,8 @@ backend/app/
   db/session.py      # engine, SessionLocal, Base, get_db()
   models/            # usuario, proyecto, proyecto_colaborador, clase_uml, atributo, metodo, relacion
   schemas/           # usuario, proyecto, colaborador, diagrama
-  routers/           # auth, usuarios, proyectos, diagramas
-  services/          # lógica de negocio (por poblar)
+  routers/           # auth, usuarios, proyectos, diagramas, generacion
+  services/          # acceso.py (control de acceso a proyecto compartido), generador_spring.py (CU08)
 backend/alembic/     # migraciones
 ```
 
@@ -63,6 +63,15 @@ Convenciones: nombres de tablas/campos en **español**, claves foráneas como `i
 - `app/routers/diagramas.py`: `GET`/`PUT /proyectos/{id}/diagrama`, accesible al administrador dueño del proyecto o a un colaborador activo.
 - El `PUT` reemplaza el diagrama completo (borra todas las clases/relaciones del proyecto y reinserta lo recibido) — no hay edición incremental por campo. El frontend lo usa como autoguardado (ver `useDiagrama.ts`).
 - `app/schemas/diagrama.py`: `DiagramaIO` (`clases: ClaseIO[]`, `relaciones: RelacionIO[]`), con `AtributoIO`/`MetodoIO` anidados en `ClaseIO`.
+- `app/services/acceso.py`: `obtener_proyecto_con_acceso` (dueño o colaborador activo) — compartida con CU08.
+
+### Generación de backend Spring Boot (CU08) — backend + frontend implementados
+
+- `app/routers/generacion.py`: `POST /proyectos/{id}/generar-backend`, mismo control de acceso que CU09; 400 si el proyecto no tiene clases todavía. Devuelve un `.zip` (proyecto Maven completo) como `StreamingResponse`.
+- `app/services/generador_spring.py`: arma el `.zip` a partir de `clases_uml`/`atributos`/`relaciones` — entidades JPA (`@Entity`/`@Table`/`@Column`, Lombok `@Getter/@Setter`), `Repository`/`Service`/`Controller` (CRUD, rutas `/api/{plural}`), `pom.xml` (Spring Boot 3.2.5, Java 17) y `application.properties` de plantilla (sin JWT todavía). Mapeo de tipos UML→Java y de multiplicidad→anotación JPA documentados en el encabezado del módulo.
+- Limitaciones conocidas: `HERENCIA` se mapea como asociación simple (sin `@Inheritance`); `es_abstracta` se ignora; pluralización heurística (no perfecta para irregulares); `orphanRemoval` se coloca en el lado `@OneToMany` real (no en el dueño/FK como decía la consigna original, porque JPA no permite ese atributo en `@ManyToOne`/`@ManyToMany` — confirmado correcto); los métodos UML no se generan. Tests en `backend/tests/test_generador_spring.py`.
+- CORS: `expose_headers=["Content-Disposition"]` en `main.py` — sin esto el navegador oculta ese header a JS y el frontend no puede leer el nombre real del `.zip` a descargar.
+- Frontend: botón "Generar backend" en `Toolbar.tsx` (visible a cualquiera con acceso al proyecto, no solo al admin), con estado de carga ("Generando…", botón deshabilitado) y banner de error dismisseable (`app/api/generacion.ts` extrae el `detail` del error aunque la respuesta venga como `Blob` por el `responseType: 'blob'`).
 
 ## Trabajo actual — Ciclo 1
 
@@ -73,10 +82,11 @@ Casos de uso, todos con **autenticación JWT**:
 - **CU03** — Perfil de usuario — *backend + frontend hechos* (`GET`/`PUT /usuarios/me`)
 - **CU04** — Gestión de proyectos (CRUD) — *backend + frontend hechos*, incluida la asignación de colaboradores (`POST`/`GET`/`DELETE /proyectos/{id}/colaboradores`, `ColaboradoresModal.tsx`).
 - **CU09** — Editor de diagrama de clases (React Flow) — *backend + frontend hechos*. En `/proyectos/:id`: crear/editar/eliminar clases con atributos, métodos, estereotipo y abstracción (arrastrables desde el grip superior del nodo; posición inicial en grilla, sin superponerse); relaciones tipadas (asociación/herencia/agregación/composición) con etiqueta y multiplicidad (`1`/`0..1`/`0..*`/`1..*`, select en el modal); autoguardado con debounce y reintento visible si falla el guardado. `guardar_diagrama` valida nombres de clase duplicados (409), que las relaciones solo referencien clases del propio payload (400) y que la multiplicidad sea una de las 4 válidas (400). Tests en `backend/tests/test_diagramas.py`.
+- **CU08** — Generación de backend Spring Boot — *backend + frontend hechos*. Botón "Generar backend" en la toolbar del editor descarga el `.zip` (ver la sección de arriba para el detalle y las limitaciones conocidas).
 
 ### Pendiente (ciclos posteriores)
 
-- **CU08 / CU15** — Generación automática de código backend / frontend a partir del diagrama.
+- **CU15** — Generación automática de código frontend a partir del diagrama.
 
 ## Comandos
 
@@ -116,4 +126,4 @@ npm run lint      # oxlint
 
 - Al crear un modelo nuevo, exportarlo en `backend/app/models/__init__.py` para que Alembic lo detecte.
 - Mantener las respuestas de la API y los esquemas Pydantic separados de los modelos ORM.
-- Priorizar avanzar el Ciclo 1; no adelantar trabajo de CU08/CU15 salvo que se pida.
+- Priorizar avanzar el Ciclo 1; no adelantar trabajo de CU15 salvo que se pida.
