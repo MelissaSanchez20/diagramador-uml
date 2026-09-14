@@ -30,6 +30,9 @@ psycopg==3.3.5
 psycopg-binary==3.3.5
 pyasn1==0.6.4
 pycparser==3.0
+pycrdt==0.14.5
+pycrdt-store==0.1.5
+pycrdt-websocket==0.16.4
 pydantic==2.13.5
 pydantic-settings==2.15.0
 pydantic_core==2.46.5
@@ -42,6 +45,7 @@ PyYAML==6.0.3
 reportlab==5.0.1
 rsa==4.9.1
 six==1.17.0
+sqlite-anyio==0.2.10
 SQLAlchemy==2.0.52
 starlette==1.6.0
 typing-inspection==0.4.4
