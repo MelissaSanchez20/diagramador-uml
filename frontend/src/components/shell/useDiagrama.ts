@@ -5,6 +5,8 @@ import type { Connection, Edge, EdgeChange, Node, NodeChange } from 'reactflow'
 import { getDiagrama, guardarDiagrama } from '../../api/diagrama'
 import { getApiErrorMessage } from '../../api/errors'
 import type { ClaseUml, DiagramaData, RelacionUml, TipoRelacion } from '../../api/types'
+import { useAuth } from '../../auth/useAuth'
+import { useColaboracion } from '../../collab/useColaboracion'
 import type { ClassNodeData } from './ClassNode'
 import { markerDeRelacion } from './umlFormat'
 
@@ -65,8 +67,8 @@ function construirNodos(
   }))
 }
 
-function construirAristas(relaciones: RelacionUml[]): Edge<EdgeData>[] {
-  return relaciones.map((r) => ({
+function construirArista(r: RelacionUml): Edge<EdgeData> {
+  return {
     id: r.id,
     source: r.id_clase_origen,
     target: r.id_clase_destino,
@@ -82,7 +84,83 @@ function construirAristas(relaciones: RelacionUml[]): Edge<EdgeData>[] {
       multiplicidad_destino: r.multiplicidad_destino,
     },
     ...markerDeRelacion(r.tipo),
-  }))
+  }
+}
+
+function construirAristas(relaciones: RelacionUml[]): Edge<EdgeData>[] {
+  return relaciones.map(construirArista)
+}
+
+/**
+ * CU10 — funde el estado remoto recibido del documento Yjs compartido con
+ * los nodos locales actuales. No es un reemplazo ciego: una clase local sin
+ * nombre todavía (fila "Nueva clase" en blanco, que el usuario está
+ * escribiendo) nunca se mandó a Yjs -- mismo criterio que ya usa
+ * `serializar()` para el autoguardado HTTP -- así que se conserva tal cual
+ * en vez de borrarla por "no estar" del lado remoto. Un nodo que se está
+ * arrastrando localmente (`dragging`) no se reposiciona con la posición
+ * remota, para no pelear con el drag en curso.
+ */
+function mezclarNodosRemotos(
+  actuales: Node<ClassNodeData>[],
+  clasesRemotas: ClaseUml[],
+  onCambiar: (clase: ClaseUml) => void,
+): Node<ClassNodeData>[] {
+  const remotasPorId = new Map(clasesRemotas.map((c) => [c.id, c]))
+  const vistos = new Set<string>()
+  const resultado: Node<ClassNodeData>[] = []
+
+  for (const nodo of actuales) {
+    const remota = remotasPorId.get(nodo.id)
+    if (remota) {
+      vistos.add(nodo.id)
+      const posicionIgual = nodo.position.x === remota.pos_x && nodo.position.y === remota.pos_y
+      const contenidoIgual = JSON.stringify(remota) === JSON.stringify(nodo.data.clase)
+      if (posicionIgual && contenidoIgual) {
+        resultado.push(nodo)
+      } else {
+        resultado.push({
+          ...nodo,
+          position: nodo.dragging ? nodo.position : { x: remota.pos_x, y: remota.pos_y },
+          data: { ...nodo.data, clase: remota },
+        })
+      }
+    } else if (!nodo.data.clase.nombre.trim()) {
+      resultado.push(nodo) // clase local sin confirmar: nunca se sincronizó, se conserva
+    }
+    // si tenía nombre y ya no aparece remotamente: se borró en otro lado, se omite
+  }
+
+  for (const remota of clasesRemotas) {
+    if (vistos.has(remota.id)) continue
+    resultado.push({
+      id: remota.id,
+      type: 'classNode',
+      position: { x: remota.pos_x, y: remota.pos_y },
+      data: { clase: remota, onCambiar },
+    })
+  }
+
+  return resultado
+}
+
+function mezclarAristasRemotas(actuales: Edge<EdgeData>[], relacionesRemotas: RelacionUml[]): Edge<EdgeData>[] {
+  const remotasPorId = new Map(relacionesRemotas.map((r) => [r.id, r]))
+  const vistos = new Set<string>()
+  const resultado: Edge<EdgeData>[] = []
+
+  for (const arista of actuales) {
+    const remota = remotasPorId.get(arista.id)
+    if (!remota) continue // se borró en otro lado
+    vistos.add(arista.id)
+    resultado.push(construirArista(remota))
+  }
+
+  for (const remota of relacionesRemotas) {
+    if (!vistos.has(remota.id)) resultado.push(construirArista(remota))
+  }
+
+  return resultado
 }
 
 function serializar(nodes: Node<ClassNodeData>[], edges: Edge<EdgeData>[]): DiagramaData {
@@ -122,6 +200,7 @@ function serializar(nodes: Node<ClassNodeData>[], edges: Edge<EdgeData>[]): Diag
 }
 
 export function useDiagrama(proyectoId: number) {
+  const { user } = useAuth()
   const [nodes, setNodes, onNodesChangeBase] = useNodesState<ClassNodeData>([])
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState<EdgeData>([])
   const [estado, setEstado] = useState<'cargando' | 'listo' | 'error'>('cargando')
@@ -129,6 +208,15 @@ export function useDiagrama(proyectoId: number) {
   const [guardando, setGuardando] = useState(false)
   const [errorGuardado, setErrorGuardado] = useState<string | null>(null)
   const cargadoRef = useRef(false)
+  // CU10 — una vez que el documento Yjs compartido sincronizó al menos una
+  // vez, es la fuente de verdad (puede tener cambios de otros colaboradores
+  // más nuevos que la última foto guardada en la BD); el GET inicial pasa a
+  // ser solo el "primer pintado" mientras se conecta el WebSocket.
+  const yjsSincronizadoRef = useRef(false)
+  // Indirección para que `guardarAhora` (definido más abajo) pueda disparar
+  // la sincronización con Yjs sin depender del orden de declaración —
+  // mismo patrón que nodesRef/edgesRef.
+  const colabPublicarRef = useRef<() => void>(() => {})
 
   // Espejo siempre-actualizado de nodes/edges, para que el guardado diferido
   // (setTimeout) lea el estado más reciente sin importar cuándo se programó.
@@ -164,6 +252,7 @@ export function useDiagrama(proyectoId: number) {
   const guardarAhora = useCallback(() => {
     if (!cargadoRef.current) return
     hayPendienteRef.current = true
+    colabPublicarRef.current() // CU10 — al colaborador en vivo no le importa el debounce de 800ms del PUT
     if (guardarTimeoutRef.current) clearTimeout(guardarTimeoutRef.current)
     guardarTimeoutRef.current = setTimeout(ejecutarGuardado, DEBOUNCE_MS)
   }, [ejecutarGuardado])
@@ -219,20 +308,56 @@ export function useDiagrama(proyectoId: number) {
     [setNodes, guardarAhora],
   )
 
+  // CU10 — llega cuando el documento Yjs compartido sincronizó (al conectar,
+  // o porque otro colaborador cambió algo): funde el estado remoto con el
+  // local (ver mezclarNodosRemotos/mezclarAristasRemotas) y, si el GET
+  // inicial todavía no terminó (o falló), esto solo alcanza para dar por
+  // cargado el diagrama igual.
+  const aplicarCambioRemoto = useCallback(
+    (datos: DiagramaData) => {
+      yjsSincronizadoRef.current = true
+      setNodes((nds) => mezclarNodosRemotos(nds, datos.clases, actualizarClase))
+      setEdges((eds) => mezclarAristasRemotas(eds, datos.relaciones))
+      setEstado('listo')
+      cargadoRef.current = true
+    },
+    [setNodes, setEdges, actualizarClase],
+  )
+
+  const usuarioColab = user ? { id: user.id, nombre_completo: user.nombre_completo } : null
+  const { estadoConexion, colaboradores, cursores, publicarCursor, publicarCambioLocal } = useColaboracion(
+    proyectoId,
+    usuarioColab,
+    aplicarCambioRemoto,
+  )
+
+  const colabDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  colabPublicarRef.current = () => {
+    if (colabDebounceRef.current) clearTimeout(colabDebounceRef.current)
+    // Debounce corto (no los 800ms del PUT): solo lo justo para que
+    // nodesRef/edgesRef ya reflejen el cambio recién hecho en este mismo
+    // tick (se actualizan en un efecto, ver arriba), sin notarse como
+    // demora para los demás colaboradores.
+    colabDebounceRef.current = setTimeout(() => {
+      publicarCambioLocal(serializar(nodesRef.current, edgesRef.current))
+    }, 50)
+  }
+
   useEffect(() => {
     let alive = true
     cargadoRef.current = false
+    yjsSincronizadoRef.current = false
     setEstado('cargando')
     getDiagrama(proyectoId)
       .then((datos) => {
-        if (!alive) return
+        if (!alive || yjsSincronizadoRef.current) return
         setNodes(construirNodos(datos.clases, actualizarClase))
         setEdges(construirAristas(datos.relaciones))
         setEstado('listo')
         cargadoRef.current = true
       })
       .catch((err) => {
-        if (!alive) return
+        if (!alive || yjsSincronizadoRef.current) return
         setError(getApiErrorMessage(err, 'No se pudo cargar el diagrama'))
         setEstado('error')
       })
@@ -339,5 +464,10 @@ export function useDiagrama(proyectoId: number) {
     crearRelacion,
     actualizarRelacion,
     eliminarRelacion,
+    // CU10
+    estadoConexion,
+    colaboradores,
+    cursores,
+    publicarCursor,
   }
 }

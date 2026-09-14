@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { toPng } from 'html-to-image'
 import { getNodesBounds, getViewportForBounds, useReactFlow } from 'reactflow'
 import { Link, useNavigate } from 'react-router-dom'
@@ -9,6 +9,8 @@ import { generarReportePdf } from '../../api/reportes'
 import { getApiErrorMessage } from '../../api/errors'
 import type { Proyecto } from '../../api/types'
 import { useAuth } from '../../auth/useAuth'
+import type { ColaboradorPresencia, EstadoConexion } from '../../collab/useColaboracion'
+import '../../collab/cursores.css'
 import { iniciales } from '../../lib/format'
 import { ColaboradoresModal } from '../../pages/ColaboradoresModal'
 
@@ -100,12 +102,51 @@ function IconDownload() {
   )
 }
 
+const ETIQUETA_CONEXION: Record<EstadoConexion, string> = {
+  conectado: 'En vivo',
+  conectando: 'Conectando…',
+  desconectado: 'Sin conexión — reintentando…',
+}
+
+/** CU10 — punto de estado discreto del WebSocket de colaboración. */
+function IndicadorConexion({ estado }: { estado: EstadoConexion }) {
+  return (
+    <span
+      className={`app-toolbar__conexion app-toolbar__conexion--${estado}`}
+      title="Colaboración en tiempo real"
+    >
+      <span className="app-toolbar__conexion-punto" aria-hidden="true" />
+      {ETIQUETA_CONEXION[estado]}
+    </span>
+  )
+}
+
+/** CU10 — quién más está viendo/editando este diagrama ahora mismo. */
+function Presencia({ colaboradores }: { colaboradores: ColaboradorPresencia[] }) {
+  if (colaboradores.length === 0) return null
+  return (
+    <span className="app-toolbar__presencia" title={colaboradores.map((c) => c.nombre).join(', ')}>
+      {colaboradores.map((c) => (
+        <span
+          key={c.clientId}
+          className="app-toolbar__avatar-colaborador"
+          style={{ '--colaborador-color': c.color } as CSSProperties}
+        >
+          {iniciales(c.nombre)}
+        </span>
+      ))}
+    </span>
+  )
+}
+
 type ToolbarProps = {
   project: Proyecto
   onNuevaClase: () => void
   guardando: boolean
   errorGuardado: string | null
   onReintentarGuardado: () => void
+  estadoConexion: EstadoConexion
+  colaboradores: ColaboradorPresencia[]
 }
 
 export function Toolbar({
@@ -114,6 +155,8 @@ export function Toolbar({
   guardando,
   errorGuardado,
   onReintentarGuardado,
+  estadoConexion,
+  colaboradores,
 }: ToolbarProps) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
@@ -257,6 +300,8 @@ export function Toolbar({
       </div>
 
       <div className="app-toolbar__user">
+        <IndicadorConexion estado={estadoConexion} />
+        <Presencia colaboradores={colaboradores} />
         {user && (
           <span className="app-toolbar__chip">
             <span className="app-toolbar__avatar" aria-hidden="true">

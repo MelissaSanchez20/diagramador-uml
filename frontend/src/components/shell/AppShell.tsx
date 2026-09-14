@@ -48,6 +48,8 @@ export function AppShell({ project }: { project: Proyecto }) {
           guardando={diagrama.guardando}
           errorGuardado={diagrama.errorGuardado}
           onReintentarGuardado={diagrama.reintentarGuardado}
+          estadoConexion={diagrama.estadoConexion}
+          colaboradores={diagrama.colaboradores}
         />
         <Sidebar
           clases={diagrama.nodes.map((n) => ({ id: n.id, nombre: n.data.clase.nombre }))}
@@ -67,6 +69,8 @@ export function AppShell({ project }: { project: Proyecto }) {
           onEdgeDoubleClick={(_e, edge) => setModal({ tipo: 'relacion-editar', edge })}
           cargando={diagrama.estado === 'cargando'}
           error={diagrama.estado === 'error' ? diagrama.error : null}
+          cursores={diagrama.cursores}
+          onPublicarCursor={diagrama.publicarCursor}
         />
       </div>
 
