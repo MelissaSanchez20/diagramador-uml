@@ -31,8 +31,8 @@ backend/app/
   db/session.py      # engine, SessionLocal, Base, get_db()
   models/            # usuario, proyecto, proyecto_colaborador, clase_uml, atributo, metodo, relacion
   schemas/           # usuario, proyecto, colaborador, diagrama
-  routers/           # auth, usuarios, proyectos, colaboradores, diagramas, generacion
-  services/          # acceso.py (control de acceso a proyecto compartido), generador_spring.py (CU08)
+  routers/           # auth, usuarios, proyectos, colaboradores, diagramas, generacion, reportes
+  services/          # acceso.py (control de acceso a proyecto compartido), generador_spring.py (CU08), generador_reporte.py (CU07)
 backend/alembic/     # migraciones
 ```
 
@@ -82,6 +82,15 @@ Convenciones: nombres de tablas/campos en **español**, claves foráneas como `i
 - CORS: `expose_headers=["Content-Disposition"]` en `main.py` — sin esto el navegador oculta ese header a JS y el frontend no puede leer el nombre real del `.zip` a descargar.
 - Frontend: botón "Generar backend" en `Toolbar.tsx` (visible a cualquiera con acceso al proyecto, no solo al admin), con estado de carga ("Generando…", botón deshabilitado) y banner de error dismisseable (`app/api/generacion.ts` extrae el `detail` del error aunque la respuesta venga como `Blob` por el `responseType: 'blob'`).
 
+### Reportes (CU07) — backend + frontend implementados
+
+- **Actor: solo el administrador dueño** del proyecto (a diferencia de CU08/CU09, un colaborador NO tiene acceso, ni siquiera de lectura). `app/routers/reportes.py`: `GET /proyectos/{id}/reporte?formato=pdf` usa `obtener_proyecto_propio` explícitamente (no el `obtener_proyecto_con_acceso` genérico) — 403 si quien pide es colaborador o no tiene relación con el proyecto. 400 con "no hay contenido disponible para exportar" si el proyecto no tiene clases.
+- Dos formatos con lógica completamente distinta:
+  - **PDF** (backend): `app/services/generador_reporte.py` arma el PDF con **reportlab** — elegido sobre WeasyPrint porque es puro Python (WeasyPrint depende de GTK/Pango a nivel de sistema operativo, un dolor de cabeza extra en Windows) y esto es un reporte técnico simple (encabezado, clases con atributos/métodos, tabla de relaciones), no necesita el motor de layout HTML/CSS de WeasyPrint. Mismo patrón `StreamingResponse` + `Content-Disposition` que CU08 (reusa el `expose_headers=["Content-Disposition"]` de CORS en `main.py`).
+  - **Imagen** (100% frontend, sin backend): captura el lienzo de React Flow a PNG en el navegador con **html-to-image** (la librería que la propia documentación de React Flow recomienda, compatible con v11) usando `getNodesBounds`/`getViewportForBounds` para encuadrar todas las clases — no llama a la API en absoluto.
+- Frontend: `Toolbar.tsx` — `<select>` de formato (PDF/Imagen) + botón "Exportar reporte", **visibles solo si `user.id === project.id_administrador`** (ocultos por completo para colaboradores, no solo deshabilitados). El chequeo de "sin contenido" es client-side (mira `getNodes().length`) y corre antes de llamar a la API o a `toPng`, así que un proyecto vacío no dispara ni la descarga de imagen ni la petición PDF. `app/api/reportes.ts` seteador de blob análogo a `generacion.ts`.
+- Tests en `backend/tests/test_reportes.py`: diagrama vacío → 400, con clases → 200/`application/pdf`, colaborador → 403, usuario sin relación → 403.
+
 ## Trabajo actual — Ciclo 1
 
 Casos de uso, todos con **autenticación JWT**:
@@ -94,6 +103,49 @@ Casos de uso, todos con **autenticación JWT**:
 - **CU05** — Gestión de integrantes/colaboradores (`<<include>>` CU06) — *backend + frontend hechos*. `app/routers/colaboradores.py` + `ColaboradoresModal.tsx` (buscador con debounce en vez de campo de email).
 - **CU09** — Editor de diagrama de clases (React Flow) — *backend + frontend hechos*. En `/proyectos/:id`: crear/editar/eliminar clases con atributos, métodos, estereotipo y abstracción (arrastrables desde el grip superior del nodo; posición inicial en grilla, sin superponerse); relaciones tipadas (asociación/herencia/agregación/composición) con etiqueta y multiplicidad (`1`/`0..1`/`0..*`/`1..*`, select en el modal) **visibles en el lienzo** cerca de cada extremo de la línea (`RelacionEdge.tsx`, edge custom — los edges de fábrica de React Flow solo soportan una etiqueta centrada); autoguardado con debounce y reintento visible si falla el guardado. `guardar_diagrama` valida nombres de clase duplicados (409), que las relaciones solo referencien clases del propio payload (400) y que la multiplicidad sea una de las 4 válidas (400). Tests en `backend/tests/test_diagramas.py`.
 - **CU08** — Generación de backend Spring Boot — *backend + frontend hechos*. Botón "Generar backend" en la toolbar del editor descarga el `.zip` (ver la sección de arriba para el detalle y las limitaciones conocidas).
+- **CU07** — Gestión de reportes (PDF/Imagen) — *backend + frontend hechos*. Ver la sección "Reportes (CU07)" arriba.
+
+## Cierre Ciclo 2 (CU05, CU06, CU07) — auditoría
+
+Revisión de cierre antes de empezar CU10. Estado confirmado:
+
+- **CU05** (gestión de colaboradores), **CU06** (búsqueda de usuarios, `<<include>>` de CU05) y **CU07** (reportes PDF/Imagen) están **completos**, backend + frontend, con tests automatizados y un flujo manual end-to-end verificado con dos usuarios reales (administrador + colaborador) que encadenó los tres casos de uso: crear proyecto → buscar y agregar colaborador (nombre parcial) → el colaborador edita el diagrama (CU09 sigue funcionando) → el colaborador intenta generar un reporte y recibe 403 sin ver el control en su Toolbar → el administrador lo quita (soft-delete) → el colaborador pierde acceso (403 en `/diagrama`, el proyecto desaparece de su lista) → el administrador lo vuelve a agregar (reactivación) → el colaborador recupera acceso normalmente. Los 12 chequeos del flujo pasaron.
+- Suite de tests backend: **69/69 passed** (`pytest -v` desde `backend/`, SQLite en memoria).
+
+### Decisiones de diseño confirmadas en esta auditoría
+
+- **Soft-delete con reactivación** (`ProyectoColaborador.activo`): quitar a un colaborador no borra la fila, solo la marca `activo=false`; volver a agregar al mismo usuario reactiva esa fila (`activo=true` + `fecha_asignacion` actualizada) en vez de violar la constraint única `(id_proyecto, id_usuario)` con una fila duplicada. Conserva historial y evita que la validación de "colaboradores activos" al eliminar un proyecto (CU04) se rompa con filas fantasma.
+- **CU07 es el único caso de uso de esta tanda con acceso exclusivo al dueño** (ni siquiera lectura para colaboradores) — decisión explícita de la ficha, distinta de CU08/CU09 donde cualquiera con acceso (dueño o colaborador activo) puede operar. El frontend refleja esto ocultando el control por completo, no solo deshabilitándolo.
+- **Agregar/quitar colaborador es por `usuario_id`** (resuelto vía la búsqueda de CU06), no por email ni por el id de la fila `ProyectoColaborador` — cambio de contrato respecto al CU04 original, ver sección de CU05/CU06 arriba.
+- **PDF vía reportlab** (puro Python, sin dependencias de sistema) e **imagen vía html-to-image en el navegador** (sin pasar por el backend) — ver el razonamiento completo en la sección "Reportes (CU07)".
+
+### Auditoría de control de acceso — endpoints de proyecto
+
+Se revisó (por código, no solo por los tests) qué helper de `app/services/acceso.py` usa cada endpoint bajo `/proyectos`. Los dos helpers:
+- `obtener_proyecto_con_acceso` → administrador dueño **o** colaborador activo.
+- `obtener_proyecto_propio` → **solo** el administrador dueño.
+
+| Endpoint | Método | Gate usado | CU | ¿Coincide con la ficha? |
+|---|---|---|---|---|
+| `/proyectos` | GET | (sin gate de un proyecto puntual — filtra por `usuario_actual.id`) | CU04 | Sí — lista proyectos propios + colaborados, no aplica a un solo proyecto |
+| `/proyectos` | POST | (sin gate — crea como propio) | CU04 | Sí |
+| `/proyectos/{id}` | PUT | `obtener_proyecto_propio` | CU04 | Sí — solo el dueño edita |
+| `/proyectos/{id}` | DELETE | `obtener_proyecto_propio` | CU04 | Sí — solo el dueño elimina |
+| `/usuarios/buscar?proyecto_id=` | GET | `obtener_proyecto_con_acceso` | CU06 | Sí — dueño o colaborador puede buscar (coherente con que también puede listar colaboradores) |
+| `/proyectos/{id}/colaboradores` | GET | `obtener_proyecto_con_acceso` | CU05 | Sí — dueño o colaborador activo ve la lista |
+| `/proyectos/{id}/colaboradores` | POST | `obtener_proyecto_propio` | CU05 | Sí — solo el dueño agrega |
+| `/proyectos/{id}/colaboradores/{usuario_id}` | DELETE | `obtener_proyecto_propio` | CU05 | Sí — solo el dueño quita |
+| `/proyectos/{id}/diagrama` | GET / PUT | `obtener_proyecto_con_acceso` | CU09 | Sí — dueño o colaborador activo |
+| `/proyectos/{id}/generar-backend` | POST | `obtener_proyecto_con_acceso` | CU08 | Sí (decisión de diseño explícita: cualquiera con acceso genera, no solo el dueño) |
+| `/proyectos/{id}/reporte` | GET | `obtener_proyecto_propio` | CU07 | Sí — solo el dueño, a diferencia de CU08 |
+
+**Resultado: no se encontró ningún endpoint con el criterio de acceso equivocado.** La división coincide en los 12 endpoints con lo que pide cada ficha de caso de uso.
+
+### Limitaciones conocidas que siguen vigentes (no perder de vista)
+
+- **CU08** (generación Spring Boot): `HERENCIA` se mapea como asociación simple (sin `@Inheritance`); `es_abstracta` se ignora; pluralización heurística (no perfecta para irregulares en español); `orphanRemoval` va en el lado `@OneToMany` real en vez del dueño/FK (JPA no lo permite ahí); los métodos UML no se generan; backend generado sin JWT. Detalle completo en la sección "Generación de backend Spring Boot (CU08)" arriba.
+- **CU09** (editor de diagrama): el `PUT /diagrama` reemplaza el diagrama completo (sin edición incremental por campo); dos usuarios editando el mismo proyecto en simultáneo pueden pisarse el autoguardado del otro (no hay locking ni merge, algo a tener en cuenta ahora que CU05 habilita colaboración real).
+- **CU07** (reportes): el PDF es un reporte de texto estructurado (clases/atributos/métodos + tabla de relaciones), no renderiza el diagrama visual con cajas y flechas — si se pide eso más adelante, es una mejora aparte.
 
 ### Pendiente (ciclos posteriores)
 
