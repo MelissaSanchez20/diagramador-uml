@@ -13,6 +13,7 @@ import type { ColaboradorPresencia, EstadoConexion } from '../../collab/useColab
 import '../../collab/cursores.css'
 import { iniciales } from '../../lib/format'
 import { ColaboradoresModal } from '../../pages/ColaboradoresModal'
+import { GenerarFrontendModal } from './GenerarFrontendModal'
 
 const MENSAJE_SIN_CONTENIDO = 'No hay contenido disponible para exportar. Agrega al menos una clase al diagrama.'
 
@@ -162,6 +163,7 @@ export function Toolbar({
   const navigate = useNavigate()
   const { fitView, getNodes } = useReactFlow()
   const [mostrarColaboradores, setMostrarColaboradores] = useState(false)
+  const [mostrarModalFrontend, setMostrarModalFrontend] = useState(false)
   const [generandoBackend, setGenerandoBackend] = useState(false)
   const [errorGeneracion, setErrorGeneracion] = useState<string | null>(null)
   const [formatoReporte, setFormatoReporte] = useState<'pdf' | 'imagen'>('pdf')
@@ -256,6 +258,11 @@ export function Toolbar({
           {generandoBackend ? 'Generando…' : 'Generar backend'}
         </ToolButton>
         {esAdministrador && (
+          <ToolButton icon={<IconDownload />} onClick={() => setMostrarModalFrontend(true)}>
+            Generar frontend
+          </ToolButton>
+        )}
+        {esAdministrador && (
           <>
             <select
               className="app-toolbar__select"
@@ -317,6 +324,9 @@ export function Toolbar({
 
       {mostrarColaboradores && (
         <ColaboradoresModal proyectoId={project.id} onClose={() => setMostrarColaboradores(false)} />
+      )}
+      {mostrarModalFrontend && (
+        <GenerarFrontendModal proyectoId={project.id} onClose={() => setMostrarModalFrontend(false)} />
       )}
     </header>
   )

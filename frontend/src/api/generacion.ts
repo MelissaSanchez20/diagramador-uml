@@ -7,9 +7,9 @@ type BackendGenerado = {
   nombreArchivo: string
 }
 
-function nombreDesdeContentDisposition(disposition: string | undefined, proyectoId: number): string {
+function nombreDesdeContentDisposition(disposition: string | undefined, nombrePorDefecto: string): string {
   const match = disposition?.match(/filename="?([^";]+)"?/)
-  return match?.[1] ?? `backend-${proyectoId}.zip`
+  return match?.[1] ?? nombrePorDefecto
 }
 
 /**
@@ -26,7 +26,40 @@ export async function generarBackend(proyectoId: number): Promise<BackendGenerad
     })
     return {
       blob: resp.data as Blob,
-      nombreArchivo: nombreDesdeContentDisposition(resp.headers['content-disposition'], proyectoId),
+      nombreArchivo: nombreDesdeContentDisposition(resp.headers['content-disposition'], `backend-${proyectoId}.zip`),
+    }
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response?.data instanceof Blob) {
+      const texto = await err.response.data.text()
+      let detalle: string | undefined
+      try {
+        detalle = (JSON.parse(texto) as { detail?: string }).detail
+      } catch {
+        /* el cuerpo del error no era JSON */
+      }
+      if (detalle) throw new Error(detalle)
+    }
+    throw err
+  }
+}
+
+/**
+ * CU15 — genera el frontend Flutter del proyecto (apuntando a `urlBase`) y
+ * devuelve el .zip listo para descargar. Mismo manejo de error que
+ * `generarBackend` (blob de error leído a mano para extraer el `detail`,
+ * ej. "no hay contenido disponible para exportar" si el diagrama no tiene
+ * clases, o el 403 si quien pide no es el administrador dueño).
+ */
+export async function generarFrontend(proyectoId: number, urlBase: string): Promise<BackendGenerado> {
+  try {
+    const resp = await api.post(
+      `/proyectos/${proyectoId}/generar-frontend`,
+      { url_base: urlBase },
+      { responseType: 'blob' },
+    )
+    return {
+      blob: resp.data as Blob,
+      nombreArchivo: nombreDesdeContentDisposition(resp.headers['content-disposition'], `frontend-${proyectoId}.zip`),
     }
   } catch (err) {
     if (axios.isAxiosError(err) && err.response?.data instanceof Blob) {

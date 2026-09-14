@@ -25,6 +25,19 @@ Limitaciones conocidas (ver también el mensaje que acompañó esta implementaci
 - `Relacion.etiqueta` no se usa para nombrar campos/columnas de la relación
   (es un texto libre para el diagrama, ej. "vive en", no un nombre de rol
   por extremo) — el nombre de campo siempre sale de la clase destino.
+- Si hay **más de una relación entre el mismo par de clases** (ej. "Miembro
+  presta Libro" y "Miembro reserva Libro"), el campo/columna de la segunda
+  relación se desambigua con un sufijo numérico (`resolver_nombres_relaciones`,
+  compartido con el generador de frontend Flutter de CU15, para que ambos
+  numeren igual). Esto corrigió, de paso, un bug real: antes la columna
+  salía siempre del nombre base sin desambiguar, así que dos relaciones al
+  mismo par de clases generaban el mismo `@JoinColumn` duplicado en la
+  misma entidad (Hibernate no arranca con eso). La corrección solo cubre
+  @OneToOne/@ManyToOne — en @ManyToMany (multiplicidad plural en ambos
+  extremos) la tabla y las columnas de join siguen saliendo únicamente de
+  los nombres de clase, así que dos relaciones M:N entre el mismo par
+  todavía chocarían ahí; no se corrigió porque el caso concreto que motivó
+  el arreglo (Miembro-Libro de arriba) es 1 a muchos, no M:N.
 - Un atributo del diagrama llamado "id" (cualquier variación de mayúsculas)
   se ignora al generar columnas: el `@Id` autogenerado ya existe siempre y
   un `@Column` adicional con el mismo nombre de campo no compila.
@@ -215,33 +228,47 @@ class DatosEntidad:
     relaciones: list[CampoRelacion] = field(default_factory=list)
 
 
-def _procesar_relaciones(
+@dataclass
+class NombresRelacion:
+    """Nombre de campo ya desambiguado (dentro de la clase que lo recibe)
+    para cada lado de una relación. Público y compartido con
+    `generador_flutter.py` (CU15): si hay más de una relación entre el
+    mismo par de clases (ej. "Miembro presta Libro" y "Miembro reserva
+    Libro"), backend y frontend generados tienen que numerar el sufijo de
+    colisión de la misma forma — si no, el campo `libroId`/`libroId2` del
+    modelo Dart no coincidiría con la clave JSON real que produce/espera el
+    backend Spring Boot."""
+
+    dueño: str  # lado con la FK escalar (@ManyToOne/@OneToOne dueño/@ManyToMany dueño)
+    inverso: str  # el otro lado (@OneToMany/@OneToOne mappedBy/@ManyToMany mappedBy)
+
+
+def resolver_nombres_relaciones(
     clases: list[ClaseUml], relaciones: list[Relacion]
-) -> dict[str, list[CampoRelacion]]:
-    """Aplica la regla de mapeo multiplicidad -> anotación JPA descrita en el
-    encabezado del módulo, devolviendo los campos de relación a agregar en
-    cada entidad, indexados por id de ClaseUml."""
+) -> dict[str, NombresRelacion]:
+    """Determina, para cada relación (indexada por `Relacion.id`), el
+    nombre de campo que le correspondería en cada una de las dos clases
+    que conecta — con el mismo criterio de "quién es el dueño" que usa
+    `_procesar_relaciones` de abajo (ver mapeo multiplicidad -> JPA en el
+    encabezado del módulo), pero sin nada específico de Java, para que
+    `generador_flutter.py` (CU15) pueda reusarlo tal cual.
+
+    Las relaciones se procesan en un orden estable (por `id`, no el orden
+    en que la fuente de datos las haya devuelto) — así el resultado no
+    depende de en qué orden llegaron las filas de la BD, y CU08/CU15
+    calculan siempre lo mismo aunque se pidan por separado."""
     clases_por_id = {c.id: c for c in clases}
-    campos_por_clase: dict[str, list[CampoRelacion]] = {c.id: [] for c in clases}
     nombres_usados_por_clase: dict[str, set[str]] = {
         c.id: {nombre_campo_java(a.nombre) for a in c.atributos} for c in clases
     }
+    resultado: dict[str, NombresRelacion] = {}
 
-    def agregar(id_clase: str, tipo_java_campo: str, nombre_propuesto: str, lineas: list[str]) -> str:
-        nombre_final = _nombre_campo_unico(nombres_usados_por_clase[id_clase], nombre_propuesto)
-        campos_por_clase[id_clase].append(
-            CampoRelacion(lineas_anotacion=lineas, tipo_java_campo=tipo_java_campo, nombre_campo=nombre_final)
-        )
-        return nombre_final
-
-    for r in relaciones:
+    for r in sorted(relaciones, key=lambda r: r.id):
         origen = clases_por_id.get(r.id_clase_origen)
         destino = clases_por_id.get(r.id_clase_destino)
         if origen is None or destino is None:
             continue  # payload inconsistente — ya se valida al guardar el diagrama (CU09)
 
-        nombre_java_origen = nombre_clase_java(origen.nombre)
-        nombre_java_destino = nombre_clase_java(destino.nombre)
         # Campo que "apunta a" cada clase. Se ignora `etiqueta` a propósito:
         # describe la relación como texto libre para el diagrama (ej. "vive
         # en"), no un nombre de rol por extremo — usarla acá daba nombres de
@@ -253,6 +280,49 @@ def _procesar_relaciones(
 
         cls_origen = _clasificar_multiplicidad(r.multiplicidad_origen)
         cls_destino = _clasificar_multiplicidad(r.multiplicidad_destino)
+
+        if cls_origen == "singular" and cls_destino == "singular":
+            dueño = _nombre_campo_unico(nombres_usados_por_clase[origen.id], campo_hacia_destino)
+            inverso = _nombre_campo_unico(nombres_usados_por_clase[destino.id], campo_hacia_origen)
+        elif cls_origen == "singular" and cls_destino == "plural":
+            dueño = _nombre_campo_unico(nombres_usados_por_clase[destino.id], campo_hacia_origen)
+            inverso = _nombre_campo_unico(nombres_usados_por_clase[origen.id], campo_hacia_destino + "List")
+        elif cls_origen == "plural" and cls_destino == "singular":
+            dueño = _nombre_campo_unico(nombres_usados_por_clase[origen.id], campo_hacia_destino)
+            inverso = _nombre_campo_unico(nombres_usados_por_clase[destino.id], campo_hacia_origen + "List")
+        else:  # plural-plural
+            dueño = _nombre_campo_unico(nombres_usados_por_clase[origen.id], campo_hacia_destino + "List")
+            inverso = _nombre_campo_unico(nombres_usados_por_clase[destino.id], campo_hacia_origen + "List")
+
+        resultado[r.id] = NombresRelacion(dueño=dueño, inverso=inverso)
+
+    return resultado
+
+
+def _procesar_relaciones(
+    clases: list[ClaseUml], relaciones: list[Relacion]
+) -> dict[str, list[CampoRelacion]]:
+    """Aplica la regla de mapeo multiplicidad -> anotación JPA descrita en el
+    encabezado del módulo, devolviendo los campos de relación a agregar en
+    cada entidad, indexados por id de ClaseUml. Los nombres de campo ya
+    vienen resueltos por `resolver_nombres_relaciones` (compartido con
+    CU15) — acá solo se decide la anotación/columna/tabla de cada uno."""
+    clases_por_id = {c.id: c for c in clases}
+    campos_por_clase: dict[str, list[CampoRelacion]] = {c.id: [] for c in clases}
+    nombres_relaciones = resolver_nombres_relaciones(clases, relaciones)
+
+    for r in relaciones:
+        origen = clases_por_id.get(r.id_clase_origen)
+        destino = clases_por_id.get(r.id_clase_destino)
+        nombres = nombres_relaciones.get(r.id)
+        if origen is None or destino is None or nombres is None:
+            continue  # payload inconsistente — ya se valida al guardar el diagrama (CU09)
+
+        nombre_java_origen = nombre_clase_java(origen.nombre)
+        nombre_java_destino = nombre_clase_java(destino.nombre)
+
+        cls_origen = _clasificar_multiplicidad(r.multiplicidad_origen)
+        cls_destino = _clasificar_multiplicidad(r.multiplicidad_destino)
         es_composicion = r.tipo == TipoRelacion.COMPOSICION
         # Herencia/Asociación/Agregación se tratan igual (sin cascade especial) —
         # ver limitación sobre no implementar @Inheritance todavía.
@@ -261,59 +331,102 @@ def _procesar_relaciones(
             # OneToOne, origen dueño (tiene la FK) — orphanRemoval sí es
             # válido en JPA sobre @OneToOne, así que aquí se sigue la
             # consigna literal (cascade+orphanRemoval en el lado dueño).
-            columna = a_snake_case(campo_hacia_destino) + "_id"
+            # La columna sale del nombre YA desambiguado (`nombres.dueño`),
+            # no de la base sin desambiguar — si no, dos relaciones al mismo
+            # par de clases generarían el mismo @JoinColumn en la misma
+            # entidad (nombre de columna duplicado, no válido en Hibernate).
+            columna = a_snake_case(nombres.dueño) + "_id"
             anotacion = _anotacion_con_cascade("@OneToOne", es_composicion, False)
-            nombre_en_origen = agregar(
-                origen.id, nombre_java_destino, campo_hacia_destino,
-                [anotacion, f'@JoinColumn(name = "{columna}")'],
+            campos_por_clase[origen.id].append(
+                CampoRelacion(
+                    lineas_anotacion=[anotacion, f'@JoinColumn(name = "{columna}")'],
+                    tipo_java_campo=nombre_java_destino,
+                    nombre_campo=nombres.dueño,
+                )
             )
-            agregar(destino.id, nombre_java_origen, campo_hacia_origen, [f'@OneToOne(mappedBy = "{nombre_en_origen}")'])
+            campos_por_clase[destino.id].append(
+                CampoRelacion(
+                    lineas_anotacion=[f'@OneToOne(mappedBy = "{nombres.dueño}")'],
+                    tipo_java_campo=nombre_java_origen,
+                    nombre_campo=nombres.inverso,
+                )
+            )
 
         elif cls_origen == "singular" and cls_destino == "plural":
             # destino = dueño (@ManyToOne, tiene la FK) / origen = inverso (@OneToMany, mappedBy).
-            columna = a_snake_case(campo_hacia_origen) + "_id"
-            nombre_en_destino = agregar(
-                destino.id, nombre_java_origen, campo_hacia_origen,
-                ["@ManyToOne", f'@JoinColumn(name = "{columna}")'],
+            columna = a_snake_case(nombres.dueño) + "_id"
+            campos_por_clase[destino.id].append(
+                CampoRelacion(
+                    lineas_anotacion=["@ManyToOne", f'@JoinColumn(name = "{columna}")'],
+                    tipo_java_campo=nombre_java_origen,
+                    nombre_campo=nombres.dueño,
+                )
             )
-            anotacion_padre = f'@OneToMany(mappedBy = "{nombre_en_destino}"' + (
+            anotacion_padre = f'@OneToMany(mappedBy = "{nombres.dueño}"' + (
                 ", cascade = CascadeType.ALL, orphanRemoval = true)" if es_composicion else ")"
             )
-            agregar(origen.id, f"List<{nombre_java_destino}>", campo_hacia_destino + "List", [anotacion_padre])
+            campos_por_clase[origen.id].append(
+                CampoRelacion(
+                    lineas_anotacion=[anotacion_padre],
+                    tipo_java_campo=f"List<{nombre_java_destino}>",
+                    nombre_campo=nombres.inverso,
+                )
+            )
 
         elif cls_origen == "plural" and cls_destino == "singular":
             # origen = dueño (@ManyToOne, tiene la FK) / destino = inverso (@OneToMany, mappedBy).
-            columna = a_snake_case(campo_hacia_destino) + "_id"
-            nombre_en_origen = agregar(
-                origen.id, nombre_java_destino, campo_hacia_destino,
-                ["@ManyToOne", f'@JoinColumn(name = "{columna}")'],
+            columna = a_snake_case(nombres.dueño) + "_id"
+            campos_por_clase[origen.id].append(
+                CampoRelacion(
+                    lineas_anotacion=["@ManyToOne", f'@JoinColumn(name = "{columna}")'],
+                    tipo_java_campo=nombre_java_destino,
+                    nombre_campo=nombres.dueño,
+                )
             )
-            anotacion_padre = f'@OneToMany(mappedBy = "{nombre_en_origen}"' + (
+            anotacion_padre = f'@OneToMany(mappedBy = "{nombres.dueño}"' + (
                 ", cascade = CascadeType.ALL, orphanRemoval = true)" if es_composicion else ")"
             )
-            agregar(destino.id, f"List<{nombre_java_origen}>", campo_hacia_origen + "List", [anotacion_padre])
+            campos_por_clase[destino.id].append(
+                CampoRelacion(
+                    lineas_anotacion=[anotacion_padre],
+                    tipo_java_campo=f"List<{nombre_java_origen}>",
+                    nombre_campo=nombres.inverso,
+                )
+            )
 
         else:
             # plural-plural: @ManyToMany, dueño = origen. orphanRemoval no
             # existe para ManyToMany en JPA; solo se agrega cascade.
+            # OJO: el nombre de la tabla/columnas de join todavía sale de
+            # las clases (no del campo desambiguado) — dos relaciones M:N
+            # entre el mismo par de clases seguirían chocando en la tabla
+            # de join. No se corrigió (ver limitación documentada arriba):
+            # el caso concreto que motivó este arreglo (ej. "Miembro presta
+            # Libro" / "Miembro reserva Libro") es 1 a muchos, no M:N.
             tabla_join = f"{a_snake_case(nombre_java_origen)}_{a_snake_case(nombre_java_destino)}"
             columna_origen = a_snake_case(nombre_java_origen) + "_id"
             columna_destino = a_snake_case(nombre_java_destino) + "_id"
             anotacion_many_to_many = _anotacion_con_cascade("@ManyToMany", False, es_composicion)
-            nombre_en_origen = agregar(
-                origen.id, f"List<{nombre_java_destino}>", campo_hacia_destino + "List",
-                [
-                    anotacion_many_to_many,
-                    "@JoinTable(",
-                    f'    name = "{tabla_join}",',
-                    f'    joinColumns = @JoinColumn(name = "{columna_origen}"),',
-                    f'    inverseJoinColumns = @JoinColumn(name = "{columna_destino}")',
-                    ")",
-                ],
+            campos_por_clase[origen.id].append(
+                CampoRelacion(
+                    lineas_anotacion=[
+                        anotacion_many_to_many,
+                        "@JoinTable(",
+                        f'    name = "{tabla_join}",',
+                        f'    joinColumns = @JoinColumn(name = "{columna_origen}"),',
+                        f'    inverseJoinColumns = @JoinColumn(name = "{columna_destino}")',
+                        ")",
+                    ],
+                    tipo_java_campo=f"List<{nombre_java_destino}>",
+                    nombre_campo=nombres.dueño,
+                )
             )
-            agregar(
-                destino.id, f"List<{nombre_java_origen}>", campo_hacia_origen + "List",
-                [f'@ManyToMany(mappedBy = "{nombre_en_origen}")'],
+            campos_por_clase[destino.id].append(
+                CampoRelacion(
+                    lineas_anotacion=[f'@ManyToMany(mappedBy = "{nombres.dueño}")'],
+                    tipo_java_campo=f"List<{nombre_java_origen}>",
+                    nombre_campo=nombres.inverso,
+                )
             )
 
     return campos_por_clase

@@ -47,6 +47,17 @@ def cargar_diagrama(proyecto_id: int, db: Session) -> DiagramaIO:
     return DiagramaIO(clases=clases, relaciones=relaciones)
 
 
+def cargar_clases_y_relaciones(proyecto_id: int, db: Session) -> tuple[list[ClaseUml], list[Relacion]]:
+    """Lectura cruda (objetos ORM, no el `DiagramaIO` de arriba) para los
+    generadores/exportadores que parten del mismo diagrama guardado:
+    reportes (CU07), generación de backend Spring Boot (CU08) y de frontend
+    Flutter (CU15) — los tres arrancan de exactamente estas dos consultas,
+    antes se repetían en cada router."""
+    clases = list(db.scalars(select(ClaseUml).where(ClaseUml.id_proyecto == proyecto_id)))
+    relaciones = list(db.scalars(select(Relacion).where(Relacion.id_proyecto == proyecto_id)))
+    return clases, relaciones
+
+
 def guardar_diagrama(proyecto_id: int, datos: DiagramaIO, db: Session) -> None:
     """Reemplazo completo: se borra todo lo existente y se reinserta lo
     recibido. Usada tanto por el autoguardado HTTP (PUT /diagrama, CU09)

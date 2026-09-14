@@ -123,6 +123,51 @@ def test_etiqueta_de_relacion_no_se_usa_como_nombre_de_campo(client, crear_usuar
     assert "private Persona direcciones;" not in contenido
 
 
+def test_dos_relaciones_al_mismo_par_de_clases_no_duplican_columna(
+    client, crear_usuario, crear_proyecto, headers, db_session
+):
+    """Regresión: antes, dos relaciones entre el mismo par de clases (ej.
+    un sistema de biblioteca con "Miembro presta Libro" y "Miembro reserva
+    Libro") generaban el mismo nombre de columna/campo dos veces en la
+    misma entidad -- @JoinColumn(name="miembro_id") repetido -- que
+    Hibernate rechaza al arrancar. El nombre de columna ahora sale del
+    campo ya desambiguado (resolver_nombres_relaciones), no del nombre base
+    sin desambiguar."""
+    admin = crear_usuario()
+    proyecto = crear_proyecto(admin)
+
+    miembro = ClaseUml(id="miembro-id", id_proyecto=proyecto.id, nombre="Miembro", es_abstracta=False, pos_x=0, pos_y=0)
+    libro = ClaseUml(id="libro-id", id_proyecto=proyecto.id, nombre="Libro", es_abstracta=False, pos_x=0, pos_y=0)
+    db_session.add(miembro)
+    db_session.add(libro)
+    db_session.commit()
+
+    for id_rel in ("rel-presta", "rel-reserva"):
+        db_session.add(
+            Relacion(
+                id=id_rel,
+                id_proyecto=proyecto.id,
+                id_clase_origen=miembro.id,
+                id_clase_destino=libro.id,
+                tipo=TipoRelacion.ASOCIACION,
+                multiplicidad_origen="1",
+                multiplicidad_destino="0..*",
+            )
+        )
+    db_session.commit()
+
+    resp = client.post(f"/proyectos/{proyecto.id}/generar-backend", headers=headers(admin))
+    assert resp.status_code == 200
+
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    libro_java = zf.read(next(n for n in zf.namelist() if n.endswith("model/Libro.java"))).decode("utf-8")
+
+    assert libro_java.count('@JoinColumn(name = "miembro_id")') == 1
+    assert '@JoinColumn(name = "miembro2_id")' in libro_java
+    assert "private Miembro miembro;" in libro_java
+    assert "private Miembro miembro2;" in libro_java
+
+
 def test_generar_backend_sin_clases_devuelve_400(client, crear_usuario, crear_proyecto, headers):
     admin = crear_usuario()
     proyecto = crear_proyecto(admin)  # sin clases en el diagrama

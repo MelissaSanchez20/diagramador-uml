@@ -3,15 +3,13 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.clase_uml import ClaseUml
-from app.models.relacion import Relacion
 from app.models.usuario import Usuario
 from app.routers.auth import get_current_user
 from app.services.acceso import obtener_proyecto_propio
+from app.services.diagrama import cargar_clases_y_relaciones
 from app.services.generador_reporte import generar_pdf_reporte
 from app.services.generador_spring import slug_paquete
 
@@ -31,13 +29,12 @@ def obtener_reporte(
     `obtener_proyecto_propio` en vez del `obtener_proyecto_con_acceso`
     genérico."""
     proyecto = obtener_proyecto_propio(proyecto_id, usuario_actual, db)
-    clases = list(db.scalars(select(ClaseUml).where(ClaseUml.id_proyecto == proyecto_id)))
+    clases, relaciones = cargar_clases_y_relaciones(proyecto_id, db)
     if not clases:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="El proyecto no tiene contenido disponible para exportar. Agrega al menos una clase al diagrama.",
         )
-    relaciones = list(db.scalars(select(Relacion).where(Relacion.id_proyecto == proyecto_id)))
 
     contenido_pdf = generar_pdf_reporte(proyecto, clases, relaciones)
     nombre_archivo = f"{slug_paquete(proyecto.nombre)}-reporte.pdf"
