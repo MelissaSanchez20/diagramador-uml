@@ -55,6 +55,7 @@
 
   /* --- Dimensiones del shell -------------------------------------------- */
   --sidebar-width: 264px;
+  --sidebar-width-colapsado: 34px;
   --toolbar-height: 44px;
 
   /* --- Espaciado --------------------------------------------------------- */

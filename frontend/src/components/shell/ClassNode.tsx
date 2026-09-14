@@ -296,7 +296,11 @@ function ClassNodeComponent({ data, selected }: NodeProps<ClassNodeData>) {
           />
         ) : (
           <div
-            className="nodrag class-node__stereotype"
+            className={
+              clase.estereotipo
+                ? 'nodrag class-node__stereotype'
+                : 'nodrag class-node__stereotype class-node__stereotype--vacio'
+            }
             onMouseDown={(e) => {
               e.stopPropagation()
               setEstereotipoTmp(clase.estereotipo ?? '')

@@ -70,6 +70,22 @@
   text-decoration: underline dotted;
 }
 
+/* Placeholder del estereotipo vacío: invisible en reposo para no generar
+   ruido visual en cada nodo — se revela solo al pasar el mouse por el nodo
+   (o si ya está seleccionado), donde sigue siendo clickeable para asignarlo. */
+.class-node__stereotype--vacio {
+  opacity: 0;
+}
+
+.react-flow__node:hover .class-node__stereotype--vacio,
+.class-node--selected .class-node__stereotype--vacio {
+  opacity: 0.6;
+}
+
+.class-node__stereotype--vacio:hover {
+  opacity: 1;
+}
+
 .class-node__name {
   font-family: var(--font-sans);
   font-weight: 600;

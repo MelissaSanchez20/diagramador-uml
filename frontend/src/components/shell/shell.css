@@ -13,6 +13,11 @@
   height: 100vh;
   overflow: hidden;
   background: var(--bg-base);
+  transition: grid-template-columns 0.18s ease;
+}
+
+.app-shell--sidebar-colapsado {
+  grid-template-columns: var(--sidebar-width-colapsado) 1fr;
 }
 
 /* --- Toolbar ------------------------------------------------------------- */
@@ -181,12 +186,19 @@
 /* --- Sidebar ----------------------------------------------------------- */
 
 .app-sidebar {
+  position: relative;
   grid-area: sidebar;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   background: var(--bg-surface);
   border-right: var(--border-hairline) solid var(--border);
+}
+
+.sidebar__topbar-colapsado {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-3) 0;
 }
 
 .sidebar__section {
@@ -215,11 +227,18 @@
   color: var(--text-secondary);
 }
 
+.sidebar__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .sidebar__add {
   display: grid;
   place-items: center;
   width: 18px;
   height: 18px;
+  padding: 0;
   color: var(--text-secondary);
   background: transparent;
   border: var(--border-hairline) solid var(--border);

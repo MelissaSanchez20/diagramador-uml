@@ -26,6 +26,7 @@ const RELACION_DEFAULT = {
 export function AppShell({ project }: { project: Proyecto }) {
   const diagrama = useDiagrama(project.id)
   const [modal, setModal] = useState<ModalDiagrama>(null)
+  const [sidebarAbierto, setSidebarAbierto] = useState(true)
 
   const cerrarModal = () => setModal(null)
 
@@ -40,7 +41,7 @@ export function AppShell({ project }: { project: Proyecto }) {
 
   return (
     <ReactFlowProvider>
-      <div className="app-shell">
+      <div className={sidebarAbierto ? 'app-shell' : 'app-shell app-shell--sidebar-colapsado'}>
         <Toolbar
           project={project}
           onNuevaClase={abrirNuevaClase}
@@ -53,6 +54,8 @@ export function AppShell({ project }: { project: Proyecto }) {
           seleccionadas={diagrama.nodes.filter((n) => n.selected).map((n) => n.id)}
           onSeleccionar={diagrama.seleccionarClase}
           onCrear={abrirNuevaClase}
+          abierto={sidebarAbierto}
+          onToggle={() => setSidebarAbierto((v) => !v)}
         />
         <CanvasArea
           nodes={diagrama.nodes}
