@@ -5,6 +5,7 @@ anyio==4.15.1
 bcrypt==4.0.1
 certifi==2026.7.22
 cffi==2.1.1
+charset-normalizer==3.5.1
 click==8.5.0
 colorama==0.4.6
 cryptography==50.0.1
@@ -23,6 +24,7 @@ Mako==1.4.1
 MarkupSafe==3.0.3
 packaging==26.3
 passlib==1.7.4
+pillow==12.3.0
 pluggy==1.6.0
 psycopg==3.3.5
 psycopg-binary==3.3.5
@@ -37,6 +39,7 @@ python-dotenv==1.2.3
 python-jose==3.5.0
 python-multipart==0.0.32
 PyYAML==6.0.3
+reportlab==5.0.1
 rsa==4.9.1
 six==1.17.0
 SQLAlchemy==2.0.52
