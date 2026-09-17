@@ -71,6 +71,8 @@ export function AppShell({ project }: { project: Proyecto }) {
           error={diagrama.estado === 'error' ? diagrama.error : null}
           cursores={diagrama.cursores}
           onPublicarCursor={diagrama.publicarCursor}
+          onDeshacer={diagrama.deshacer}
+          onRehacer={diagrama.rehacer}
         />
       </div>
 

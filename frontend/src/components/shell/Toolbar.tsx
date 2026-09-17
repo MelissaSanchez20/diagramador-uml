@@ -5,7 +5,7 @@ import { getNodesBounds, getViewportForBounds, useReactFlow } from 'reactflow'
 import { Link, useNavigate } from 'react-router-dom'
 
 import { descargarArchivo, generarBackend } from '../../api/generacion'
-import { generarReportePdf } from '../../api/reportes'
+import { generarReportePdf, generarReporteXmi } from '../../api/reportes'
 import { getApiErrorMessage } from '../../api/errors'
 import type { Proyecto } from '../../api/types'
 import { useAuth } from '../../auth/useAuth'
@@ -166,7 +166,7 @@ export function Toolbar({
   const [mostrarModalFrontend, setMostrarModalFrontend] = useState(false)
   const [generandoBackend, setGenerandoBackend] = useState(false)
   const [errorGeneracion, setErrorGeneracion] = useState<string | null>(null)
-  const [formatoReporte, setFormatoReporte] = useState<'pdf' | 'imagen'>('pdf')
+  const [formatoReporte, setFormatoReporte] = useState<'pdf' | 'imagen' | 'xmi'>('pdf')
   const [generandoReporte, setGenerandoReporte] = useState(false)
   const [errorReporte, setErrorReporte] = useState<string | null>(null)
   const esAdministrador = user?.id === project.id_administrador
@@ -201,8 +201,9 @@ export function Toolbar({
 
     setGenerandoReporte(true)
     try {
-      if (formatoReporte === 'pdf') {
-        const { blob, nombreArchivo } = await generarReportePdf(project.id)
+      if (formatoReporte === 'pdf' || formatoReporte === 'xmi') {
+        const generar = formatoReporte === 'pdf' ? generarReportePdf : generarReporteXmi
+        const { blob, nombreArchivo } = await generar(project.id)
         descargarArchivo(blob, nombreArchivo)
       } else {
         const viewportEl = document.querySelector('.react-flow__viewport') as HTMLElement | null
@@ -269,10 +270,11 @@ export function Toolbar({
               aria-label="Formato del reporte"
               value={formatoReporte}
               disabled={generandoReporte}
-              onChange={(e) => setFormatoReporte(e.target.value as 'pdf' | 'imagen')}
+              onChange={(e) => setFormatoReporte(e.target.value as 'pdf' | 'imagen' | 'xmi')}
             >
               <option value="pdf">PDF</option>
               <option value="imagen">Imagen</option>
+              <option value="xmi">XMI</option>
             </select>
             <ToolButton icon={<IconDownload />} disabled={generandoReporte} onClick={handleExportarReporte}>
               {generandoReporte ? 'Exportando…' : 'Exportar reporte'}

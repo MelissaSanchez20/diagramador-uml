@@ -44,6 +44,17 @@ type Props = {
   error: string | null
   cursores: CursorRemoto[]
   onPublicarCursor: (posicion: { x: number; y: number } | null) => void
+  onDeshacer: () => void
+  onRehacer: () => void
+}
+
+/** Un campo de texto en edición (nombre de clase, atributo, etc.) maneja su
+ * propio Ctrl+Z nativo del navegador -- interceptarlo ahí rompería esa
+ * edición en curso, así que el atajo de deshacer/rehacer del diagrama solo
+ * actúa fuera de un campo editable. */
+function enCampoEditable(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
 }
 
 export function CanvasArea({
@@ -58,6 +69,8 @@ export function CanvasArea({
   error,
   cursores,
   onPublicarCursor,
+  onDeshacer,
+  onRehacer,
 }: Props) {
   const { fitView, screenToFlowPosition } = useReactFlow()
   const ultimoEnvioRef = useRef(0)
@@ -71,6 +84,29 @@ export function CanvasArea({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cargando])
+
+  // Ctrl+Z / Ctrl+Shift+Z (o Ctrl+Y) mientras se trabaja en el lienzo del
+  // editor -- se escucha a nivel de ventana (no hace falta que el <main>
+  // tenga foco propio, los nodos no son focuseables) pero se ignora si el
+  // target es un campo de texto en edición, para no pisar su undo nativo.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || enCampoEditable(e.target)) return
+      const tecla = e.key.toLowerCase()
+      if (tecla === 'z' && e.shiftKey) {
+        e.preventDefault()
+        onRehacer()
+      } else if (tecla === 'z') {
+        e.preventDefault()
+        onDeshacer()
+      } else if (tecla === 'y') {
+        e.preventDefault()
+        onRehacer()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onDeshacer, onRehacer])
 
   // CU10 — posición del mouse local, en coordenadas de React Flow (no de
   // pantalla: así el cursor se ve en el lugar correcto para cualquier otro

@@ -325,11 +325,8 @@ export function useDiagrama(proyectoId: number) {
   )
 
   const usuarioColab = user ? { id: user.id, nombre_completo: user.nombre_completo } : null
-  const { estadoConexion, colaboradores, cursores, publicarCursor, publicarCambioLocal } = useColaboracion(
-    proyectoId,
-    usuarioColab,
-    aplicarCambioRemoto,
-  )
+  const { estadoConexion, colaboradores, cursores, publicarCursor, publicarCambioLocal, deshacer, rehacer } =
+    useColaboracion(proyectoId, usuarioColab, aplicarCambioRemoto)
 
   const colabDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   colabPublicarRef.current = () => {
@@ -469,5 +466,9 @@ export function useDiagrama(proyectoId: number) {
     colaboradores,
     cursores,
     publicarCursor,
+    // Undo/redo (Y.UndoManager, ver useColaboracion) -- solo atajos de
+    // teclado (CanvasArea), sin control visible en la toolbar a propósito.
+    deshacer,
+    rehacer,
   }
 }

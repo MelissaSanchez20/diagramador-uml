@@ -63,6 +63,7 @@ export function useColaboracion(
   const [colaboradores, setColaboradores] = useState<ColaboradorPresencia[]>([])
   const [cursores, setCursores] = useState<CursorRemoto[]>([])
   const providerRef = useRef<WebsocketProvider | null>(null)
+  const undoManagerRef = useRef<Y.UndoManager | null>(null)
 
   const onCambioRemotoRef = useRef(onCambioRemoto)
   useEffect(() => {
@@ -113,6 +114,25 @@ export function useColaboracion(
 
     const clasesMap = doc.getMap('clases')
     const relacionesMap = doc.getMap('relaciones')
+
+    // Undo/redo (solo atajos de teclado, sin control visible en la UI):
+    // `trackedOrigins` limitado a ORIGEN_LOCAL es lo que hace que el Ctrl+Z
+    // de este usuario nunca deshaga cambios de otro colaborador -- las
+    // transacciones que llegan por la red (aplicadas por el provider al
+    // recibir un update) tienen un origin distinto y el UndoManager las
+    // ignora por completo, tanto para capturarlas como para no reescribirlas
+    // al hacer undo/redo de las propias. `sincronizarLocalAYjs` ya agrupa
+    // todo un diff local (ej. borrar una clase + sus atributos + sus
+    // relaciones) en una sola `doc.transact(...)`, así que ya sale como un
+    // único paso de undo sin configuración extra; el `captureTimeout` por
+    // default (500ms) además funde ediciones muy seguidas (ej. tipear un
+    // nombre) en un solo paso, como se espera de un undo tipo editor de
+    // texto.
+    const undoManager = new Y.UndoManager([clasesMap, relacionesMap], {
+      trackedOrigins: new Set([ORIGEN_LOCAL]),
+    })
+    undoManagerRef.current = undoManager
+
     const onCambioProfundo = (_events: unknown, transaccion: Y.Transaction) => {
       // Los cambios que acabamos de escribir nosotros mismos (ver
       // publicarCambioLocal) ya están reflejados en el estado local — no
@@ -147,6 +167,8 @@ export function useColaboracion(
       provider.awareness.off('change', actualizarPresencia)
       clasesMap.unobserveDeep(onCambioProfundo)
       relacionesMap.unobserveDeep(onCambioProfundo)
+      undoManager.destroy()
+      undoManagerRef.current = null
       // disconnect() manda el aviso de desconexión de awareness antes de
       // cerrar el socket -- así los demás colaboradores pierden nuestro
       // cursor/chip de inmediato en vez de esperar el timeout de 30s.
@@ -168,5 +190,21 @@ export function useColaboracion(
     sincronizarLocalAYjs(provider.doc, datos)
   }, [])
 
-  return { estadoConexion, colaboradores, cursores, publicarCursor, publicarCambioLocal }
+  const deshacer = useCallback(() => {
+    undoManagerRef.current?.undo()
+  }, [])
+
+  const rehacer = useCallback(() => {
+    undoManagerRef.current?.redo()
+  }, [])
+
+  return {
+    estadoConexion,
+    colaboradores,
+    cursores,
+    publicarCursor,
+    publicarCambioLocal,
+    deshacer,
+    rehacer,
+  }
 }
