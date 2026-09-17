@@ -15,3 +15,27 @@ export async function guardarDiagrama(
   const { data } = await api.put<DiagramaData>(`/proyectos/${proyectoId}/diagrama`, datos)
   return data
 }
+
+export type ImportacionXmiResultado = {
+  diagrama: DiagramaData
+  advertencias: string[]
+}
+
+/**
+ * CU09 — importa un archivo .xmi como el diagrama de clases del proyecto.
+ * Solo se admite sobre un diagrama todavía vacío (el backend responde 409
+ * si el proyecto ya tiene clases, 400 si el archivo no es XML válido o no
+ * contiene ninguna clase UML reconocible) — ver `app/services/importador_xmi.py`.
+ */
+export async function importarDiagramaXmi(
+  proyectoId: number,
+  archivo: File,
+): Promise<ImportacionXmiResultado> {
+  const formData = new FormData()
+  formData.append('archivo', archivo)
+  const { data } = await api.post<ImportacionXmiResultado>(
+    `/proyectos/${proyectoId}/diagrama/importar-xmi`,
+    formData,
+  )
+  return data
+}

@@ -104,14 +104,88 @@
   border-color: var(--accent-hover);
 }
 
-.app-toolbar__select {
-  height: 28px;
-  padding: 0 8px;
+.app-toolbar__input-archivo {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* --- Menú "Archivo" ------------------------------------------------------ */
+
+.menu-archivo {
+  position: relative;
+}
+
+.menu-archivo__trigger {
+  cursor: pointer;
+}
+
+.menu-archivo__lista {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: var(--space-1);
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+}
+
+.menu-archivo__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: 30px;
+  padding: 0 var(--space-2);
   font-size: var(--text-sm);
   color: var(--text-primary);
-  background: var(--bg-surface);
-  border: var(--border-hairline) solid var(--border);
+  text-align: left;
+  background: transparent;
+  border: none;
   border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.menu-archivo__item span {
+  flex: 1;
+}
+
+.menu-archivo__item:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.menu-archivo__item:disabled {
+  color: var(--text-secondary);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.menu-archivo__submenu-wrapper {
+  position: relative;
+}
+
+.menu-archivo__submenu {
+  position: absolute;
+  top: 0;
+  left: calc(100% + var(--space-1));
+  z-index: 21;
+  display: flex;
+  flex-direction: column;
+  min-width: 110px;
+  padding: var(--space-1);
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
 }
 
 .app-toolbar__guardando {

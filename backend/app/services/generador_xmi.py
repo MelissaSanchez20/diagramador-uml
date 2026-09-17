@@ -163,6 +163,7 @@ MAPEO_TIPOS_XMI: dict[str, str] = {
     "double": "Real",
     "decimal": "Real",
     "bigdecimal": "Real",
+    "real": "Real",
     "boolean": "Boolean",
     "bool": "Boolean",
     # UML2 no tiene un primitivo Date/DateTime/UUID -- ver limitaciones en el

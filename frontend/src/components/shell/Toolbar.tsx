@@ -1,19 +1,22 @@
-import { useState } from 'react'
-import type { CSSProperties, ReactNode } from 'react'
+import { useRef, useState } from 'react'
+import type { ChangeEvent, CSSProperties, ReactNode } from 'react'
 import { toPng } from 'html-to-image'
 import { getNodesBounds, getViewportForBounds, useReactFlow } from 'reactflow'
 import { Link, useNavigate } from 'react-router-dom'
 
+import { importarDiagramaXmi } from '../../api/diagrama'
 import { descargarArchivo, generarBackend } from '../../api/generacion'
 import { generarReportePdf, generarReporteXmi } from '../../api/reportes'
 import { getApiErrorMessage } from '../../api/errors'
-import type { Proyecto } from '../../api/types'
+import type { DiagramaData, Proyecto } from '../../api/types'
 import { useAuth } from '../../auth/useAuth'
 import type { ColaboradorPresencia, EstadoConexion } from '../../collab/useColaboracion'
 import '../../collab/cursores.css'
 import { iniciales } from '../../lib/format'
 import { ColaboradoresModal } from '../../pages/ColaboradoresModal'
 import { GenerarFrontendModal } from './GenerarFrontendModal'
+import type { FormatoReporte } from './MenuArchivo'
+import { MenuArchivo } from './MenuArchivo'
 
 const MENSAJE_SIN_CONTENIDO = 'No hay contenido disponible para exportar. Agrega al menos una clase al diagrama.'
 
@@ -43,15 +46,17 @@ type ToolButtonProps = {
   primary?: boolean
   disabled?: boolean
   onClick?: () => void
+  title?: string
 }
 
-function ToolButton({ children, icon, primary, disabled, onClick }: ToolButtonProps) {
+function ToolButton({ children, icon, primary, disabled, onClick, title }: ToolButtonProps) {
   return (
     <button
       type="button"
       className={primary ? 'tool-btn tool-btn--primary' : 'tool-btn'}
       disabled={disabled}
       onClick={onClick}
+      title={title}
     >
       {icon}
       {children}
@@ -82,20 +87,6 @@ function IconUsers() {
         d="M5 6.5a2 2 0 100-4 2 2 0 000 4zM1.5 12c0-2 1.5-3.5 3.5-3.5S8.5 10 8.5 12M9.5 4a1.8 1.8 0 110 3.6M9 8.7c1.6.1 2.9 1.5 3 3.3"
         stroke="currentColor"
         strokeWidth="1.3"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  )
-}
-
-function IconDownload() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-      <path
-        d="M7 1.5v7m0 0L4 5.5M7 8.5l3-3M2 10.5v1.5a1 1 0 001 1h8a1 1 0 001-1v-1.5"
-        stroke="currentColor"
-        strokeWidth="1.5"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
@@ -148,6 +139,8 @@ type ToolbarProps = {
   onReintentarGuardado: () => void
   estadoConexion: EstadoConexion
   colaboradores: ColaboradorPresencia[]
+  diagramaVacio: boolean
+  onImportadoXmi: (datos: DiagramaData) => void
 }
 
 export function Toolbar({
@@ -158,6 +151,8 @@ export function Toolbar({
   onReintentarGuardado,
   estadoConexion,
   colaboradores,
+  diagramaVacio,
+  onImportadoXmi,
 }: ToolbarProps) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
@@ -166,9 +161,12 @@ export function Toolbar({
   const [mostrarModalFrontend, setMostrarModalFrontend] = useState(false)
   const [generandoBackend, setGenerandoBackend] = useState(false)
   const [errorGeneracion, setErrorGeneracion] = useState<string | null>(null)
-  const [formatoReporte, setFormatoReporte] = useState<'pdf' | 'imagen' | 'xmi'>('pdf')
   const [generandoReporte, setGenerandoReporte] = useState(false)
   const [errorReporte, setErrorReporte] = useState<string | null>(null)
+  const [importandoXmi, setImportandoXmi] = useState(false)
+  const [errorImportacion, setErrorImportacion] = useState<string | null>(null)
+  const [advertenciasImportacion, setAdvertenciasImportacion] = useState<string[]>([])
+  const inputArchivoXmiRef = useRef<HTMLInputElement>(null)
   const esAdministrador = user?.id === project.id_administrador
 
   const handleLogout = () => {
@@ -189,10 +187,34 @@ export function Toolbar({
     }
   }
 
+  // CU09 — importar XMI: solo habilitado con el lienzo vacío (ver
+  // `diagramaVacio`, calculado en AppShell a partir del estado real de
+  // React Flow, no de un chequeo imperativo en el momento del click). El
+  // backend ya valida esto también (409) -- este chequeo es solo para no
+  // ofrecer un botón habilitado que va a fallar seguro.
+  const handleArchivoXmiSeleccionado = async (e: ChangeEvent<HTMLInputElement>) => {
+    const archivo = e.target.files?.[0]
+    e.target.value = '' // permite volver a elegir el mismo archivo si hace falta reintentar
+    if (!archivo) return
+
+    setErrorImportacion(null)
+    setAdvertenciasImportacion([])
+    setImportandoXmi(true)
+    try {
+      const resultado = await importarDiagramaXmi(project.id, archivo)
+      onImportadoXmi(resultado.diagrama)
+      setAdvertenciasImportacion(resultado.advertencias)
+    } catch (err) {
+      setErrorImportacion(getApiErrorMessage(err, 'No se pudo importar el archivo XMI'))
+    } finally {
+      setImportandoXmi(false)
+    }
+  }
+
   // CU07 — el PDF se pide al backend (formato técnico: clases, atributos,
   // métodos, relaciones); la imagen se exporta enteramente en el navegador
   // capturando el lienzo de React Flow tal cual está, sin llamar al backend.
-  const handleExportarReporte = async () => {
+  const handleExportarReporte = async (formato: FormatoReporte) => {
     setErrorReporte(null)
     if (getNodes().length === 0) {
       setErrorReporte(MENSAJE_SIN_CONTENIDO)
@@ -201,8 +223,8 @@ export function Toolbar({
 
     setGenerandoReporte(true)
     try {
-      if (formatoReporte === 'pdf' || formatoReporte === 'xmi') {
-        const generar = formatoReporte === 'pdf' ? generarReportePdf : generarReporteXmi
+      if (formato === 'pdf' || formato === 'xmi') {
+        const generar = formato === 'pdf' ? generarReportePdf : generarReporteXmi
         const { blob, nombreArchivo } = await generar(project.id)
         descargarArchivo(blob, nombreArchivo)
       } else {
@@ -250,36 +272,34 @@ export function Toolbar({
         <ToolButton icon={<IconFit />} onClick={() => fitView({ padding: 0.25 })}>
           Ajustar vista
         </ToolButton>
+        <MenuArchivo
+          onImportarXmi={() => inputArchivoXmiRef.current?.click()}
+          importarXmiDeshabilitado={!diagramaVacio}
+          importarXmiTooltip={
+            !diagramaVacio
+              ? 'El diagrama ya tiene clases -- elimínalas manualmente para poder importar un XMI'
+              : undefined
+          }
+          importandoXmi={importandoXmi}
+          onGenerarBackend={handleGenerarBackend}
+          generandoBackend={generandoBackend}
+          mostrarGenerarFrontend={esAdministrador}
+          onGenerarFrontend={() => setMostrarModalFrontend(true)}
+          mostrarExportarReporte={esAdministrador}
+          generandoReporte={generandoReporte}
+          onExportarReporte={handleExportarReporte}
+        />
+        <input
+          ref={inputArchivoXmiRef}
+          type="file"
+          accept=".xmi,.xml,text/xml,application/xml"
+          className="app-toolbar__input-archivo"
+          onChange={handleArchivoXmiSeleccionado}
+        />
         {esAdministrador && (
           <ToolButton icon={<IconUsers />} onClick={() => setMostrarColaboradores(true)}>
             Colaboradores
           </ToolButton>
-        )}
-        <ToolButton icon={<IconDownload />} disabled={generandoBackend} onClick={handleGenerarBackend}>
-          {generandoBackend ? 'Generando…' : 'Generar backend'}
-        </ToolButton>
-        {esAdministrador && (
-          <ToolButton icon={<IconDownload />} onClick={() => setMostrarModalFrontend(true)}>
-            Generar frontend
-          </ToolButton>
-        )}
-        {esAdministrador && (
-          <>
-            <select
-              className="app-toolbar__select"
-              aria-label="Formato del reporte"
-              value={formatoReporte}
-              disabled={generandoReporte}
-              onChange={(e) => setFormatoReporte(e.target.value as 'pdf' | 'imagen' | 'xmi')}
-            >
-              <option value="pdf">PDF</option>
-              <option value="imagen">Imagen</option>
-              <option value="xmi">XMI</option>
-            </select>
-            <ToolButton icon={<IconDownload />} disabled={generandoReporte} onClick={handleExportarReporte}>
-              {generandoReporte ? 'Exportando…' : 'Exportar reporte'}
-            </ToolButton>
-          </>
         )}
         {guardando && <span className="app-toolbar__guardando">Guardando…</span>}
         {!guardando && errorGuardado && (
@@ -302,6 +322,27 @@ export function Toolbar({
           <span className="app-toolbar__error">
             {errorReporte}
             <button type="button" className="app-toolbar__reintentar" onClick={() => setErrorReporte(null)}>
+              Cerrar
+            </button>
+          </span>
+        )}
+        {errorImportacion && (
+          <span className="app-toolbar__error">
+            {errorImportacion}
+            <button type="button" className="app-toolbar__reintentar" onClick={() => setErrorImportacion(null)}>
+              Cerrar
+            </button>
+          </span>
+        )}
+        {advertenciasImportacion.length > 0 && (
+          <span className="app-toolbar__error" title={advertenciasImportacion.join('\n')}>
+            Se importó con {advertenciasImportacion.length} advertencia
+            {advertenciasImportacion.length === 1 ? '' : 's'} (pasa el mouse para ver el detalle)
+            <button
+              type="button"
+              className="app-toolbar__reintentar"
+              onClick={() => setAdvertenciasImportacion([])}
+            >
               Cerrar
             </button>
           </span>

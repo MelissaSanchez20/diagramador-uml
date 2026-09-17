@@ -255,6 +255,7 @@ def test_xmi_estereotipo_queda_como_comentario_no_como_stereotype_formal(
         ("double", "Real"),
         ("decimal", "Real"),
         ("bigdecimal", "Real"),
+        ("real", "Real"),
         ("boolean", "Boolean"),
         ("bool", "Boolean"),
         # UML2 no tiene primitivo Date/UUID -- ver limitaciones documentadas

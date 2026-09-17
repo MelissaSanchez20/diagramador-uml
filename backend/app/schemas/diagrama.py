@@ -55,3 +55,13 @@ class RelacionIO(BaseModel):
 class DiagramaIO(BaseModel):
     clases: list[ClaseIO] = []
     relaciones: list[RelacionIO] = []
+
+
+class ImportacionXmiResultado(BaseModel):
+    """Respuesta de `POST /proyectos/{id}/diagrama/importar-xmi` (CU09): el
+    diagrama ya guardado, más cualquier advertencia de cosas del archivo que
+    no se pudieron interpretar del todo (ver `app/services/importador_xmi.py`)
+    -- no son errores fatales, el import se completó igual."""
+
+    diagrama: DiagramaIO
+    advertencias: list[str] = []

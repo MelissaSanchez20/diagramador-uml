@@ -50,6 +50,8 @@ export function AppShell({ project }: { project: Proyecto }) {
           onReintentarGuardado={diagrama.reintentarGuardado}
           estadoConexion={diagrama.estadoConexion}
           colaboradores={diagrama.colaboradores}
+          diagramaVacio={diagrama.estado === 'listo' && diagrama.nodes.length === 0}
+          onImportadoXmi={diagrama.importarDiagrama}
         />
         <Sidebar
           clases={diagrama.nodes.map((n) => ({ id: n.id, nombre: n.data.clase.nombre }))}

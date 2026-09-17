@@ -397,6 +397,21 @@ export function useDiagrama(proyectoId: number) {
     [setNodes],
   )
 
+  // Importación XMI (CU09): el backend ya guardó `datos` en la BD (endpoint
+  // POST .../importar-xmi) -- acá solo se refleja en el lienzo sin recargar
+  // la página, con el mismo `guardarAhora()` que dispara el resto de
+  // acciones (sincroniza a Yjs para cualquier otro colaborador conectado;
+  // el PUT HTTP que dispara es redundante con lo que ya guardó el backend,
+  // pero inofensivo, mismo patrón que el resto de acciones locales).
+  const importarDiagrama = useCallback(
+    (datos: DiagramaData) => {
+      setNodes(construirNodos(datos.clases, actualizarClase))
+      setEdges(construirAristas(datos.relaciones))
+      guardarAhora()
+    },
+    [setNodes, setEdges, guardarAhora, actualizarClase],
+  )
+
   const crearRelacion = useCallback(
     (conexion: Connection, detalles: DetallesRelacion) => {
       if (!conexion.source || !conexion.target) return
@@ -461,6 +476,7 @@ export function useDiagrama(proyectoId: number) {
     crearRelacion,
     actualizarRelacion,
     eliminarRelacion,
+    importarDiagrama,
     // CU10
     estadoConexion,
     colaboradores,
