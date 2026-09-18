@@ -89,13 +89,17 @@ def test_generar_frontend_con_relacion_singular_plural(client, crear_usuario, cr
     assert "${Config.urlBase}/api/direcciones" in servicio_direccion
 
     # El formulario de Direccion tiene un Dropdown para elegir la Persona,
-    # que carga la lista llamando al servicio de Persona antes de mostrarse.
+    # que carga la lista llamando al repositorio de Persona antes de
+    # mostrarse (CU14: local-first, funciona offline -- ya no el service
+    # de red directo). El Dropdown es <String> keyeado por localId (no
+    # <int> por id de backend), porque el padre elegido puede no haber
+    # sincronizado todavía.
     form_direccion = zf.read(
         next(n for n in nombres if n.endswith("lib/screens/direccion_form_screen.dart"))
     ).decode("utf-8")
-    assert "DropdownButtonFormField<int>" in form_direccion
-    assert "_personaService.listar()" in form_direccion
-    assert "PersonaService _personaService = PersonaService();" in form_direccion
+    assert "DropdownButtonFormField<String>" in form_direccion
+    assert "_personaRepositorio.listar()" in form_direccion
+    assert "PersonaRepositorio _personaRepositorio = PersonaRepositorio();" in form_direccion
 
     # El formulario de Persona, en cambio, no tiene ningún Dropdown (no
     # referencia a ninguna otra clase).

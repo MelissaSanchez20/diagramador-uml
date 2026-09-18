@@ -55,6 +55,51 @@ Limitaciones conocidas:
   constructor (no hay que resolver qué combinación de atributos es
   "requerida" a partir de un diagrama que no declara nulabilidad) y evita
   que datos incompletos que ya estén en el backend rompan el parseo.
+
+CU14 — modo offline (agrega capa de datos local a lo ya descrito arriba):
+- Almacenamiento local: `sqflite` (SQLite embebido) — no necesita
+  codegen/build_runner (a diferencia de Hive/Isar/Drift), lo que sería
+  incómodo de generar como texto plano desde Python. Conectividad:
+  `connectivity_plus`.
+- Cada clase tiene una tabla SQLite propia. **Identidad local**: `localId`
+  (uuid generado en el cliente) es la clave primaria local, siempre
+  presente; `id` (el id numérico del backend) es nulo hasta sincronizar.
+  **Las columnas de relación guardan siempre el `localId` del padre**,
+  nunca su `id` de backend — la resolución a un id real ocurre solo al
+  armar el pedido de sincronización, leyendo el `id` actual de la fila
+  padre en ese momento. Si el padre todavía no sincronizó, el hijo se
+  salta esa pasada y se reintenta solo (sin esperar un nuevo evento de
+  conectividad: `SyncManager` repite pasadas hasta que una no logra
+  ningún progreso).
+- **Sin tabla de "cola" de operaciones separada** — el estado de
+  sincronización vive como columnas en la propia fila de cada registro
+  (`estadoSync` ∈ `sincronizado | pendienteCrear | pendienteActualizar |
+  pendienteEliminar | fallidoCrear | fallidoActualizar | fallidoEliminar`,
+  `errorSync`): una fila = un registro = a lo sumo una operación
+  pendiente. Evita un log de eventos a reproducir (evita duplicar
+  operaciones si el usuario edita el mismo registro varias veces
+  offline) — el precio es que no hay historial: "Descartar" una
+  actualización/eliminación fallida vuelve a pedir el registro real al
+  backend (`obtenerPorId`) y sobrescribe la fila local con esa verdad, en
+  vez de deshacer al valor anterior exacto; "Descartar" una creación
+  fallida simplemente borra la fila local (nunca existió en el backend).
+  Las filas `fallido*` NO se reintentan solas en cada sync (para no
+  insistir con algo que ya se sabe que el backend rechaza) — el usuario
+  las revisa en `SincronizacionScreen` ("Reintentar"/"Descartar").
+- **Orden de sincronización entre clases**: calculado en Python
+  (`_orden_topologico`, mismo criterio `_propietario_relacion` de arriba)
+  y hardcodeado como el orden de llamadas en `sync_manager.dart` — las
+  clases referenciadas ("uno") sincronizan antes que las que las
+  referencian ("muchos", dueñas de la FK). Un ciclo real entre clases cae
+  al orden de declaración original (no se resuelve automáticamente).
+- Un atributo del diagrama llamado exactamente `localId`, `estadoSync` o
+  `errorSync` (case-sensitive) chocaría con estos campos reservados — no
+  se previene explícitamente, es un caso extremo no contemplado.
+- Limitación de `refrescarDesdeRed`: solo hace upsert de lo que devuelve
+  el backend contra el cache local — no borra localmente un registro que
+  otro usuario haya borrado en el servidor (sin tombstones/reconciliación
+  completa). El registro reaparecería recién si alguien más lo modifica y
+  el próximo refresh lo vuelve a traer con datos distintos.
 """
 
 from __future__ import annotations
@@ -117,6 +162,23 @@ TECLADO_POR_TIPO_DART: dict[str, str] = {
     "bool": "TextInputType.text",
     "DateTime": "TextInputType.datetime",
 }
+
+
+# CU14 — tipo de columna SQLite para cada tipo Dart ya mapeado arriba. bool
+# se guarda como INTEGER (0/1, sqflite no tiene tipo booleano nativo);
+# DateTime como TEXT (ISO 8601), igual criterio que ya usa toJson/fromJson
+# para la red.
+TIPO_SQLITE_POR_TIPO_DART: dict[str, str] = {
+    "String": "TEXT",
+    "int": "INTEGER",
+    "double": "REAL",
+    "bool": "INTEGER",
+    "DateTime": "TEXT",
+}
+
+
+def tipo_sqlite(tipo_dart: str) -> str:
+    return TIPO_SQLITE_POR_TIPO_DART.get(tipo_dart, "TEXT")
 
 
 def mapear_tipo_dart(tipo_uml: str | None) -> str:
@@ -234,6 +296,42 @@ def _procesar_relaciones(
     return campos_por_clase
 
 
+def _orden_topologico(
+    clases_datos: list[DatosClase], clases: list[ClaseUml], relaciones: list[Relacion]
+) -> list[DatosClase]:
+    """CU14 — orden en el que `sync_manager.dart` sincroniza cada tabla: las
+    clases referenciadas ("uno") antes que las que las referencian
+    ("muchos", dueñas de la FK) — mismo criterio `_propietario_relacion` de
+    arriba. Un ciclo real entre clases cae al orden de declaración original
+    para lo que quede sin resolver (limitación documentada en el
+    encabezado del módulo)."""
+    clases_por_id = {c.id: c for c in clases}
+
+    dependencias: dict[str, set[str]] = {d.clase.id: set() for d in clases_datos}
+    for r in relaciones:
+        propietario = _propietario_relacion(r, clases_por_id)
+        if propietario is None:
+            continue
+        dueño, referenciada = propietario
+        if dueño.id in dependencias and referenciada.id in dependencias:
+            dependencias[dueño.id].add(referenciada.id)
+
+    resueltos: list[DatosClase] = []
+    resueltos_ids: set[str] = set()
+    restantes = list(clases_datos)
+
+    while restantes:
+        listos = [d for d in restantes if dependencias[d.clase.id] <= resueltos_ids]
+        if not listos:
+            resueltos.extend(restantes)  # ciclo real -- orden de declaración para el resto
+            break
+        resueltos.extend(listos)
+        resueltos_ids.update(d.clase.id for d in listos)
+        restantes = [d for d in restantes if d not in listos]
+
+    return resueltos
+
+
 # --------------------------------------------------------------------------
 # Ayudas para parsear el texto de un TextFormField de vuelta al tipo Dart
 # del atributo (al guardar) y para precargarlo como texto (al editar).
@@ -276,10 +374,21 @@ def _renderizar_modelo(datos: DatosClase) -> str:
         lineas_campos.append(f"  {a.tipo_dart}? {a.nombre_campo};")
     for r in datos.relaciones:
         lineas_campos.append(f"  int? {r.nombre_campo};")
+    # CU14 — además del id de backend, se guarda el localId del padre: las
+    # FKs locales SIEMPRE referencian por localId (nunca por id de backend),
+    # para poder enlazar registros creados offline antes de que sincronicen
+    # (ver encabezado del módulo).
+    for r in datos.relaciones:
+        lineas_campos.append(f"  String? {r.nombre_base}LocalId;")
+    lineas_campos.append("  String localId;")
+    lineas_campos.append("  String estadoSync;")
+    lineas_campos.append("  String? errorSync;")
 
-    parametros_constructor = ["    this.id,"]
+    parametros_constructor = ["    String? localId,", "    this.id,"]
     parametros_constructor += [f"    this.{a.nombre_campo}," for a in datos.atributos]
     parametros_constructor += [f"    this.{r.nombre_campo}," for r in datos.relaciones]
+    parametros_constructor += [f"    this.{r.nombre_base}LocalId," for r in datos.relaciones]
+    parametros_constructor += ["    this.estadoSync = 'sincronizado',", "    this.errorSync,"]
 
     lineas_from_json = ["      id: json['id'] as int?,"]
     for a in datos.atributos:
@@ -313,13 +422,54 @@ def _renderizar_modelo(datos: DatosClase) -> str:
             f"      if ({r.nombre_campo} != null) '{r.nombre_json}': {{'id': {r.nombre_campo}}},"
         )
 
+    # CU14 — fromRow/toRow (SQLite local), independientes de fromJson/toJson
+    # (red): bool se guarda como 0/1 (sqflite no tiene tipo booleano), y las
+    # relaciones guardan el localId del padre (no su id de backend).
+    lineas_from_row = ["      localId: fila['localId'] as String,", "      id: fila['id'] as int?,"]
+    for a in datos.atributos:
+        if a.tipo_dart == "bool":
+            lineas_from_row.append(
+                f"      {a.nombre_campo}: fila['{a.nombre_campo}'] == null"
+                f" ? null : (fila['{a.nombre_campo}'] as int) == 1,"
+            )
+        elif a.tipo_dart == "DateTime":
+            lineas_from_row.append(
+                f"      {a.nombre_campo}: fila['{a.nombre_campo}'] != null"
+                f" ? DateTime.parse(fila['{a.nombre_campo}'] as String) : null,"
+            )
+        else:
+            lineas_from_row.append(f"      {a.nombre_campo}: fila['{a.nombre_campo}'] as {a.tipo_dart}?,")
+    for r in datos.relaciones:
+        lineas_from_row.append(f"      {r.nombre_campo}: fila['{r.nombre_campo}'] as int?,")
+        lineas_from_row.append(f"      {r.nombre_base}LocalId: fila['{r.nombre_base}LocalId'] as String?,")
+    lineas_from_row.append("      estadoSync: fila['estadoSync'] as String,")
+    lineas_from_row.append("      errorSync: fila['errorSync'] as String?,")
+
+    lineas_to_row = ["      'localId': localId,", "      'id': id,"]
+    for a in datos.atributos:
+        if a.tipo_dart == "bool":
+            lineas_to_row.append(
+                f"      '{a.nombre_campo}': {a.nombre_campo} == null ? null : ({a.nombre_campo}! ? 1 : 0),"
+            )
+        elif a.tipo_dart == "DateTime":
+            lineas_to_row.append(f"      '{a.nombre_campo}': {a.nombre_campo}?.toIso8601String(),")
+        else:
+            lineas_to_row.append(f"      '{a.nombre_campo}': {a.nombre_campo},")
+    for r in datos.relaciones:
+        lineas_to_row.append(f"      '{r.nombre_campo}': {r.nombre_campo},")
+        lineas_to_row.append(f"      '{r.nombre_base}LocalId': {r.nombre_base}LocalId,")
+    lineas_to_row.append("      'estadoSync': estadoSync,")
+    lineas_to_row.append("      'errorSync': errorSync,")
+
     return f"""// Generado automáticamente (CU15) a partir del diagrama de clases.
+import 'package:uuid/uuid.dart';
+
 class {nombre} {{
 {chr(10).join(lineas_campos)}
 
   {nombre}({{
 {chr(10).join(parametros_constructor)}
-  }});
+  }}) : localId = localId ?? const Uuid().v4();
 
   factory {nombre}.fromJson(Map<String, dynamic> json) {{
     return {nombre}(
@@ -330,6 +480,19 @@ class {nombre} {{
   Map<String, dynamic> toJson() {{
     return {{
 {chr(10).join(lineas_to_json)}
+    }};
+  }}
+
+  // CU14 — offline: lectura/escritura contra la tabla SQLite local.
+  factory {nombre}.fromRow(Map<String, dynamic> fila) {{
+    return {nombre}(
+{chr(10).join(lineas_from_row)}
+    );
+  }}
+
+  Map<String, dynamic> toRow() {{
+    return {{
+{chr(10).join(lineas_to_row)}
     }};
   }}
 }}
@@ -401,6 +564,463 @@ class {nombre}Service {{
 """
 
 
+# --------------------------------------------------------------------------
+# CU14 — capa offline: base local (db.dart), conectividad, repositorio por
+# clase (lectura/escritura local + sincronización) y el orquestador
+# (SyncManager) que llama a cada repositorio en orden topológico.
+# --------------------------------------------------------------------------
+
+
+def _renderizar_offline_db(slug: str, clases_datos: list[DatosClase]) -> str:
+    tablas = []
+    for d in clases_datos:
+        columnas = ["            localId TEXT PRIMARY KEY", "            id INTEGER"]
+        for a in d.atributos:
+            columnas.append(f"            {a.nombre_campo} {tipo_sqlite(a.tipo_dart)}")
+        for r in d.relaciones:
+            columnas.append(f"            {r.nombre_campo} INTEGER")
+            columnas.append(f"            {r.nombre_base}LocalId TEXT")
+        columnas.append("            estadoSync TEXT NOT NULL DEFAULT 'sincronizado'")
+        columnas.append("            errorSync TEXT")
+        cuerpo_columnas = ",\n".join(columnas)
+        tablas.append(
+            f"        await db.execute('''\n"
+            f"          CREATE TABLE {d.archivo} (\n"
+            f"{cuerpo_columnas}\n"
+            f"          )\n"
+            f"        ''');"
+        )
+    cuerpo_tablas = "\n".join(tablas)
+
+    return f"""// Generado automáticamente (CU14) — base SQLite local, una tabla por
+// clase del diagrama. `localId` (generado en el cliente) es la clave local;
+// `id` es el id del backend, nulo hasta que el registro sincroniza. Las
+// columnas de relación guardan el `localId` del padre (nunca su `id` de
+// backend) -- ver `sync_manager.dart` para la resolución al sincronizar.
+import 'package:path/path.dart';
+import 'package:sqflite/sqflite.dart';
+
+class OfflineDb {{
+  static Database? _db;
+
+  static Future<Database> instancia() async {{
+    if (_db != null) return _db!;
+    final ruta = join(await getDatabasesPath(), '{slug}_offline.db');
+    _db = await openDatabase(
+      ruta,
+      version: 1,
+      onCreate: (db, version) async {{
+{cuerpo_tablas}
+      }},
+    );
+    return _db!;
+  }}
+}}
+"""
+
+
+def _renderizar_conectividad() -> str:
+    return """// Generado automáticamente (CU14).
+import 'package:connectivity_plus/connectivity_plus.dart';
+
+class Conectividad {
+  static bool _conectadoAnteriormente = true;
+
+  static Future<bool> estaConectado() async {
+    final resultados = await Connectivity().checkConnectivity();
+    return _algunaConexionReal(resultados);
+  }
+
+  static bool _algunaConexionReal(List<ConnectivityResult> resultados) {
+    return resultados.any((r) => r != ConnectivityResult.none);
+  }
+
+  /// Llama a `alReconectar` cada vez que el dispositivo pasa de sin-conexión
+  /// a con-conexión (no en cada evento de conectividad suelto).
+  static void escucharReconexion(Future<void> Function() alReconectar) {
+    Connectivity().onConnectivityChanged.listen((resultados) {
+      final conectadoAhora = _algunaConexionReal(resultados);
+      if (conectadoAhora && !_conectadoAnteriormente) {
+        alReconectar();
+      }
+      _conectadoAnteriormente = conectadoAhora;
+    });
+  }
+}
+"""
+
+
+def _renderizar_repositorio(datos: DatosClase) -> str:
+    nombre = datos.nombre_dart
+    tabla = datos.archivo
+    var = nombre_campo_java(nombre)
+
+    # La resolución de FKs (abajo) trabaja con `db.query(...)` crudo (solo
+    # necesita el nombre de tabla de la clase relacionada, un string) -- no
+    # instancia ni importa su modelo/servicio, así que no hace falta
+    # importar `../models/{relacionada}.dart` acá.
+
+    # Resolución de FKs al sincronizar: busca el id de backend de la clase
+    # referenciada a partir del localId guardado en este registro -- si el
+    # padre todavía no sincronizó (sigue sin id), esta fila se salta en esta
+    # pasada (su estado no cambia, se reintenta solo en la próxima).
+    bloques_fk = []
+    for r in datos.relaciones:
+        bloques_fk.append(
+            f"        if (objeto.{r.nombre_base}LocalId != null) {{\n"
+            f"          final filasPadre = await db.query(\n"
+            f"            '{r.archivo_relacionado}',\n"
+            f"            where: 'localId = ?',\n"
+            f"            whereArgs: [objeto.{r.nombre_base}LocalId],\n"
+            f"          );\n"
+            f"          if (filasPadre.isEmpty || filasPadre.first['id'] == null) {{\n"
+            f"            continue; // el padre todavía no sincronizó\n"
+            f"          }}\n"
+            f"          objeto.{r.nombre_campo} = filasPadre.first['id'] as int;\n"
+            f"        }}"
+        )
+    cuerpo_resolucion_fks = "\n".join(bloques_fk) if bloques_fk else "        // sin relaciones que resolver"
+
+    return f"""// Generado automáticamente (CU14) — capa offline-first de {nombre}: lee y
+// escribe siempre contra la tabla SQLite local; sincroniza con el backend
+// cuando hay conexión (orquestado por lib/offline/sync_manager.dart).
+import '../models/{tabla}.dart';
+import '../services/{tabla}_service.dart';
+import 'db.dart';
+
+class {nombre}Repositorio {{
+  final {nombre}Service _service = {nombre}Service();
+
+  Future<List<{nombre}>> listar() async {{
+    final db = await OfflineDb.instancia();
+    final filas = await db.query('{tabla}');
+    return filas.map((f) => {nombre}.fromRow(f)).toList();
+  }}
+
+  /// Trae la lista real del backend y actualiza el cache local (solo pisa
+  /// registros ya sincronizados -- nunca un cambio local pendiente). Falla
+  /// en silencio si no hay conexión: el cache local sigue disponible.
+  Future<void> refrescarDesdeRed() async {{
+    try {{
+      final remotos = await _service.listar();
+      final db = await OfflineDb.instancia();
+      for (final r in remotos) {{
+        final existentes = await db.query('{tabla}', where: 'id = ?', whereArgs: [r.id]);
+        if (existentes.isNotEmpty) {{
+          final fila = existentes.first;
+          if (fila['estadoSync'] == 'sincronizado') {{
+            r.localId = fila['localId'] as String;
+            await db.update('{tabla}', r.toRow(), where: 'localId = ?', whereArgs: [r.localId]);
+          }}
+        }} else {{
+          await db.insert('{tabla}', r.toRow());
+        }}
+      }}
+    }} catch (_) {{
+      // sin conexión o backend no disponible -- se sigue mostrando el cache local
+    }}
+  }}
+
+  Future<{nombre}> crear({nombre} {var}) async {{
+    {var}.estadoSync = 'pendienteCrear';
+    final db = await OfflineDb.instancia();
+    await db.insert('{tabla}', {var}.toRow());
+    return {var};
+  }}
+
+  Future<{nombre}> actualizar({nombre} {var}) async {{
+    if ({var}.estadoSync != 'pendienteCrear') {{
+      {var}.estadoSync = 'pendienteActualizar';
+    }}
+    {var}.errorSync = null;
+    final db = await OfflineDb.instancia();
+    await db.update('{tabla}', {var}.toRow(), where: 'localId = ?', whereArgs: [{var}.localId]);
+    return {var};
+  }}
+
+  Future<void> eliminar(String localId) async {{
+    final db = await OfflineDb.instancia();
+    final filas = await db.query('{tabla}', where: 'localId = ?', whereArgs: [localId]);
+    if (filas.isEmpty) return;
+    if (filas.first['estadoSync'] == 'pendienteCrear') {{
+      await db.delete('{tabla}', where: 'localId = ?', whereArgs: [localId]);
+    }} else {{
+      await db.update(
+        '{tabla}',
+        {{'estadoSync': 'pendienteEliminar', 'errorSync': null}},
+        where: 'localId = ?',
+        whereArgs: [localId],
+      );
+    }}
+  }}
+
+  /// Descarta una operación fallida: para una creación, borra la fila local
+  /// (nunca existió en el backend); para una actualización/eliminación,
+  /// vuelve a pedir el registro real al backend y sobrescribe la fila local
+  /// con esa verdad (si tampoco se puede, borra la fila local).
+  Future<void> descartar(String localId) async {{
+    final db = await OfflineDb.instancia();
+    final filas = await db.query('{tabla}', where: 'localId = ?', whereArgs: [localId]);
+    if (filas.isEmpty) return;
+    final fila = filas.first;
+    if (fila['id'] == null) {{
+      await db.delete('{tabla}', where: 'localId = ?', whereArgs: [localId]);
+      return;
+    }}
+    try {{
+      final real = await _service.obtenerPorId(fila['id'] as int);
+      real.localId = localId;
+      await db.update('{tabla}', real.toRow(), where: 'localId = ?', whereArgs: [localId]);
+    }} catch (_) {{
+      await db.delete('{tabla}', where: 'localId = ?', whereArgs: [localId]);
+    }}
+  }}
+
+  /// Procesa las filas pendientes de esta tabla contra el backend. Devuelve
+  /// true si al menos una operación se completó con éxito (lo usa
+  /// SyncManager para decidir si vale la pena repetir otra pasada, por si
+  /// esto desbloqueó una FK pendiente en otra tabla).
+  Future<bool> sincronizar() async {{
+    final db = await OfflineDb.instancia();
+    final pendientes = await db.query(
+      '{tabla}',
+      where: "estadoSync IN ('pendienteCrear', 'pendienteActualizar', 'pendienteEliminar')",
+    );
+    var huboProgreso = false;
+
+    for (final fila in pendientes) {{
+      final objeto = {nombre}.fromRow(fila);
+      final estado = fila['estadoSync'] as String;
+
+      if (estado != 'pendienteEliminar') {{
+{cuerpo_resolucion_fks}
+      }}
+
+      try {{
+        if (estado == 'pendienteCrear') {{
+          final creado = await _service.crear(objeto);
+          await db.update(
+            '{tabla}',
+            {{'id': creado.id, 'estadoSync': 'sincronizado', 'errorSync': null}},
+            where: 'localId = ?',
+            whereArgs: [objeto.localId],
+          );
+          huboProgreso = true;
+        }} else if (estado == 'pendienteActualizar') {{
+          await _service.actualizar(objeto.id!, objeto);
+          await db.update(
+            '{tabla}',
+            {{'estadoSync': 'sincronizado', 'errorSync': null}},
+            where: 'localId = ?',
+            whereArgs: [objeto.localId],
+          );
+          huboProgreso = true;
+        }} else if (estado == 'pendienteEliminar') {{
+          await _service.eliminar(objeto.id!);
+          await db.delete('{tabla}', where: 'localId = ?', whereArgs: [objeto.localId]);
+          huboProgreso = true;
+        }}
+      }} catch (e) {{
+        final estadoFallido = estado == 'pendienteCrear'
+            ? 'fallidoCrear'
+            : estado == 'pendienteActualizar'
+                ? 'fallidoActualizar'
+                : 'fallidoEliminar';
+        await db.update(
+          '{tabla}',
+          {{'estadoSync': estadoFallido, 'errorSync': e.toString()}},
+          where: 'localId = ?',
+          whereArgs: [objeto.localId],
+        );
+      }}
+    }}
+
+    return huboProgreso;
+  }}
+
+  /// Vuelve a poner en cola una operación marcada como fallida.
+  Future<void> reintentar(String localId) async {{
+    final db = await OfflineDb.instancia();
+    final filas = await db.query('{tabla}', where: 'localId = ?', whereArgs: [localId]);
+    if (filas.isEmpty) return;
+    final actual = filas.first['estadoSync'] as String;
+    await db.update(
+      '{tabla}',
+      {{'estadoSync': actual.replaceFirst('fallido', 'pendiente'), 'errorSync': null}},
+      where: 'localId = ?',
+      whereArgs: [localId],
+    );
+  }}
+
+  Future<List<{nombre}>> fallidas() async {{
+    final db = await OfflineDb.instancia();
+    final filas = await db.query('{tabla}', where: "estadoSync LIKE 'fallido%'");
+    return filas.map((f) => {nombre}.fromRow(f)).toList();
+  }}
+
+  Future<int> contarPendientes() async {{
+    final db = await OfflineDb.instancia();
+    final filas = await db.query('{tabla}', where: "estadoSync != 'sincronizado'");
+    return filas.length;
+  }}
+}}
+"""
+
+
+def _renderizar_sync_manager(clases_ordenadas: list[DatosClase]) -> str:
+    imports = "\n".join(f"import '{d.archivo}_repositorio.dart';" for d in clases_ordenadas)
+    variables = [(nombre_campo_java(d.nombre_dart), d.nombre_dart) for d in clases_ordenadas]
+    instancias = "\n".join(
+        f"final {var}Repositorio = {nombre}Repositorio();" for var, nombre in variables
+    )
+    llamadas = "\n".join(
+        f"      final resultado{i} = await {var}Repositorio.sincronizar();\n"
+        f"      if (resultado{i}) progreso = true;"
+        for i, (var, _) in enumerate(variables)
+    )
+    return f"""// Generado automáticamente (CU14). Orden de sincronización calculado a
+// partir de las relaciones del diagrama: las clases referenciadas
+// sincronizan antes que las que las referencian (dueñas de la FK), para
+// poder resolver el id real del padre antes de mandar al hijo. Repite
+// pasadas hasta que una no logra ningún progreso (resuelve cadenas de
+// dependencia de varios niveles sin esperar un nuevo evento de conexión).
+import 'conectividad.dart';
+{imports}
+
+{instancias}
+
+class SyncManager {{
+  static Future<void> sincronizarTodo() async {{
+    if (!await Conectividad.estaConectado()) return;
+    for (var intento = 0; intento < 3; intento++) {{
+      var progreso = false;
+{llamadas}
+      if (!progreso) break;
+    }}
+  }}
+}}
+"""
+
+
+def _renderizar_sincronizacion_screen(clases_datos: list[DatosClase]) -> str:
+    """CU14 — pantalla de revisión: una sección por clase con sus
+    operaciones fallidas (mensaje de error + "Reintentar"/"Descartar"). Sin
+    reflexión en tiempo de ejecución en Dart, cada clase se enumera
+    explícitamente (mismo criterio que ya usa `_renderizar_main` para el
+    listado de `HomeScreen`)."""
+    imports = "\n".join(
+        f"import '../models/{d.archivo}.dart';\nimport '../offline/{d.archivo}_repositorio.dart';"
+        for d in clases_datos
+    )
+
+    campos_estado = "\n".join(
+        f"  final {d.nombre_dart}Repositorio _{d.archivo}Repositorio = {d.nombre_dart}Repositorio();\n"
+        f"  List<{d.nombre_dart}> _{d.archivo}Fallidas = [];"
+        for d in clases_datos
+    )
+
+    carga = "\n".join(
+        f"    _{d.archivo}Fallidas = await _{d.archivo}Repositorio.fallidas();" for d in clases_datos
+    )
+
+    condicion_vacio = " && ".join(f"_{d.archivo}Fallidas.isEmpty" for d in clases_datos) or "true"
+
+    secciones = "\n".join(
+        f"""                    ..._seccion(
+                      '{d.nombre_dart}',
+                      _{d.archivo}Fallidas,
+                      _{d.archivo}Repositorio,
+                    ),"""
+        for d in clases_datos
+    )
+
+    return f"""// Generado automáticamente (CU14) — revisión de operaciones que el
+// backend rechazó al sincronizar: mensaje de error y opción de
+// reintentarlas o descartarlas (ver limitaciones de "descartar" en el
+// encabezado de generador_flutter.py).
+import 'package:flutter/material.dart';
+
+{imports}
+import '../offline/sync_manager.dart';
+
+class SincronizacionScreen extends StatefulWidget {{
+  const SincronizacionScreen({{super.key}});
+
+  @override
+  State<SincronizacionScreen> createState() => _SincronizacionScreenState();
+}}
+
+class _SincronizacionScreenState extends State<SincronizacionScreen> {{
+{campos_estado}
+  bool _cargando = true;
+
+  @override
+  void initState() {{
+    super.initState();
+    _cargar();
+  }}
+
+  Future<void> _cargar() async {{
+    setState(() => _cargando = true);
+{carga}
+    if (mounted) setState(() => _cargando = false);
+  }}
+
+  List<Widget> _seccion(String titulo, List<dynamic> fallidas, dynamic repositorio) {{
+    if (fallidas.isEmpty) return const [];
+    return [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+        child: Text(titulo, style: const TextStyle(fontWeight: FontWeight.bold)),
+      ),
+      ...fallidas.map(
+        (item) => ListTile(
+          title: Text('${{titulo}} -- ${{item.estadoSync}}'),
+          subtitle: Text(item.errorSync ?? ''),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextButton(
+                onPressed: () async {{
+                  await repositorio.reintentar(item.localId as String);
+                  await SyncManager.sincronizarTodo();
+                  _cargar();
+                }},
+                child: const Text('Reintentar'),
+              ),
+              TextButton(
+                onPressed: () async {{
+                  await repositorio.descartar(item.localId as String);
+                  _cargar();
+                }},
+                child: const Text('Descartar'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ];
+  }}
+
+  @override
+  Widget build(BuildContext context) {{
+    return Scaffold(
+      appBar: AppBar(title: const Text('Sincronización')),
+      body: _cargando
+          ? const Center(child: CircularProgressIndicator())
+          : ({condicion_vacio})
+              ? const Center(child: Text('No hay operaciones pendientes de revisión.'))
+              : ListView(
+                  children: [
+{secciones}
+                  ],
+                ),
+    );
+  }}
+}}
+"""
+
+
 def _texto_item_lista(datos: DatosClase) -> tuple[str, str]:
     """Título y subtítulo (expresiones Dart de interpolación de string) para
     cada fila de la pantalla de listado, a partir de los atributos de la
@@ -415,14 +1035,29 @@ def _texto_item_lista(datos: DatosClase) -> tuple[str, str]:
     return titulo, subtitulo
 
 
+def _icono_estado_sync(variable_estado: str) -> str:
+    """CU14 — indicador visual del estado de sincronización de un registro
+    en la pantalla de listado: nube tachada = pendiente, alerta = fallido,
+    nada = ya sincronizado."""
+    return (
+        f"{variable_estado}.startsWith('fallido')\n"
+        f"                    ? const Icon(Icons.error_outline, color: Colors.red)\n"
+        f"                    : {variable_estado} != 'sincronizado'\n"
+        f"                        ? const Icon(Icons.cloud_upload_outlined, color: Colors.grey)\n"
+        f"                        : null"
+    )
+
+
 def _renderizar_list_screen(datos: DatosClase) -> str:
     nombre = datos.nombre_dart
     titulo, subtitulo = _texto_item_lista(datos)
-    return f"""// Generado automáticamente (CU15).
+    icono_estado = _icono_estado_sync("item.estadoSync")
+    return f"""// Generado automáticamente (CU15/CU14).
 import 'package:flutter/material.dart';
 
 import '../models/{datos.archivo}.dart';
-import '../services/{datos.archivo}_service.dart';
+import '../offline/{datos.archivo}_repositorio.dart';
+import '../offline/sync_manager.dart';
 import '{datos.archivo}_form_screen.dart';
 
 class {nombre}ListScreen extends StatefulWidget {{
@@ -433,24 +1068,34 @@ class {nombre}ListScreen extends StatefulWidget {{
 }}
 
 class _{nombre}ListScreenState extends State<{nombre}ListScreen> {{
-  final {nombre}Service _service = {nombre}Service();
+  final {nombre}Repositorio _repositorio = {nombre}Repositorio();
   late Future<List<{nombre}>> _futuro;
 
   @override
   void initState() {{
     super.initState();
-    _futuro = _service.listar();
+    _futuro = _repositorio.listar();
+    _sincronizarYRecargar();
+  }}
+
+  // CU14 — lee siempre del cache local primero (instantáneo, funciona
+  // offline); si hay conexión, refresca el cache desde el backend y drena
+  // las operaciones pendientes en segundo plano, y recarga al terminar.
+  Future<void> _sincronizarYRecargar() async {{
+    await _repositorio.refrescarDesdeRed();
+    await SyncManager.sincronizarTodo();
+    if (mounted) _recargar();
   }}
 
   void _recargar() {{
     setState(() {{
-      _futuro = _service.listar();
+      _futuro = _repositorio.listar();
     }});
   }}
 
   Future<void> _eliminar({nombre} item) async {{
-    if (item.id == null) return;
-    await _service.eliminar(item.id!);
+    await _repositorio.eliminar(item.localId);
+    await SyncManager.sincronizarTodo();
     _recargar();
   }}
 
@@ -476,6 +1121,7 @@ class _{nombre}ListScreenState extends State<{nombre}ListScreen> {{
             itemBuilder: (context, index) {{
               final item = items[index];
               return ListTile(
+                leading: {icono_estado},
                 title: Text({titulo}),
                 subtitle: Text({subtitulo}),
                 trailing: Row(
@@ -523,7 +1169,7 @@ def _renderizar_form_screen(datos: DatosClase) -> str:
 
     imports_relaciones = "\n".join(
         f"import '../models/{r.archivo_relacionado}.dart';\n"
-        f"import '../services/{r.archivo_relacionado}_service.dart';"
+        f"import '../offline/{r.archivo_relacionado}_repositorio.dart';"
         for r in datos.relaciones
     )
 
@@ -532,10 +1178,13 @@ def _renderizar_form_screen(datos: DatosClase) -> str:
         for a in datos.atributos
     )
 
+    # CU14 — el estado del dropdown de cada relación es el localId del
+    # padre elegido (no su id de backend, que puede no existir todavía si
+    # el padre se creó offline y no sincronizó).
     estado_relaciones = "\n".join(
-        f"  final {r.clase_relacionada}Service _{r.nombre_base}Service = {r.clase_relacionada}Service();\n"
+        f"  final {r.clase_relacionada}Repositorio _{r.nombre_base}Repositorio = {r.clase_relacionada}Repositorio();\n"
         f"  List<{r.clase_relacionada}> _{r.nombre_base}Opciones = [];\n"
-        f"  int? _{r.nombre_campo};"
+        f"  String? _{r.nombre_base}LocalId;"
         for r in datos.relaciones
     )
 
@@ -544,7 +1193,7 @@ def _renderizar_form_screen(datos: DatosClase) -> str:
         for a in datos.atributos
     )
     precarga_relaciones = "\n".join(
-        f"      _{r.nombre_campo} = item.{r.nombre_campo};" for r in datos.relaciones
+        f"      _{r.nombre_base}LocalId = item.{r.nombre_base}LocalId;" for r in datos.relaciones
     )
 
     dispose_controllers = "\n".join(
@@ -553,7 +1202,7 @@ def _renderizar_form_screen(datos: DatosClase) -> str:
 
     carga_relaciones = (
         "\n".join(
-            f"    final opciones{i} = await _{r.nombre_base}Service.listar();"
+            f"    final opciones{i} = await _{r.nombre_base}Repositorio.listar();"
             for i, r in enumerate(datos.relaciones)
         )
         + ("\n" if datos.relaciones else "")
@@ -567,7 +1216,7 @@ def _renderizar_form_screen(datos: DatosClase) -> str:
         for a in datos.atributos
     )
     campos_constructor_relaciones = "\n".join(
-        f"      {r.nombre_campo}: _{r.nombre_campo}," for r in datos.relaciones
+        f"      {r.nombre_base}LocalId: _{r.nombre_base}LocalId," for r in datos.relaciones
     )
 
     campos_formulario: list[str] = []
@@ -582,25 +1231,26 @@ def _renderizar_form_screen(datos: DatosClase) -> str:
         )
     for r in datos.relaciones:
         campos_formulario.append(
-            f"                    DropdownButtonFormField<int>(\n"
-            f"                      value: _{r.nombre_campo},\n"
+            f"                    DropdownButtonFormField<String>(\n"
+            f"                      value: _{r.nombre_base}LocalId,\n"
             f"                      decoration: const InputDecoration(labelText: '{r.etiqueta}'),\n"
             f"                      items: _{r.nombre_base}Opciones\n"
-            f"                          .map((o) => DropdownMenuItem<int>(\n"
-            f"                                value: o.id,\n"
-            f"                                child: Text(o.id == null ? '(sin id)' : 'ID ${{o.id}}'),\n"
+            f"                          .map((o) => DropdownMenuItem<String>(\n"
+            f"                                value: o.localId,\n"
+            f"                                child: Text(o.id == null ? 'Pendiente de sincronizar' : 'ID ${{o.id}}'),\n"
             f"                              ))\n"
             f"                          .toList(),\n"
-            f"                      onChanged: (valor) => setState(() => _{r.nombre_campo} = valor),\n"
+            f"                      onChanged: (valor) => setState(() => _{r.nombre_base}LocalId = valor),\n"
             "                    ),"
         )
     cuerpo_campos = "\n".join(campos_formulario)
 
-    return f"""// Generado automáticamente (CU15).
+    return f"""// Generado automáticamente (CU15/CU14).
 import 'package:flutter/material.dart';
 
 import '../models/{datos.archivo}.dart';
-import '../services/{datos.archivo}_service.dart';
+import '../offline/{datos.archivo}_repositorio.dart';
+import '../offline/sync_manager.dart';
 {imports_relaciones}
 
 class {nombre}FormScreen extends StatefulWidget {{
@@ -614,7 +1264,7 @@ class {nombre}FormScreen extends StatefulWidget {{
 
 class _{nombre}FormScreenState extends State<{nombre}FormScreen> {{
   final _formKey = GlobalKey<FormState>();
-  final {nombre}Service _service = {nombre}Service();
+  final {nombre}Repositorio _repositorio = {nombre}Repositorio();
 {controllers}
 {estado_relaciones}
   bool _cargandoRelaciones = true;
@@ -646,15 +1296,17 @@ class _{nombre}FormScreenState extends State<{nombre}FormScreen> {{
   Future<void> _guardar() async {{
     if (!_formKey.currentState!.validate()) return;
     final objeto = {nombre}(
+      localId: widget.item?.localId,
       id: widget.item?.id,
 {campos_constructor_atributos}
 {campos_constructor_relaciones}
     );
     if (widget.item == null) {{
-      await _service.crear(objeto);
+      await _repositorio.crear(objeto);
     }} else {{
-      await _service.actualizar(objeto.id!, objeto);
+      await _repositorio.actualizar(objeto);
     }}
+    await SyncManager.sincronizarTodo();
     if (mounted) Navigator.pop(context);
   }}
 
@@ -700,7 +1352,7 @@ class Config {{
 
 
 def _renderizar_main(nombre_proyecto: str, clases_datos: list[DatosClase]) -> str:
-    imports = "\n".join(f"import 'screens/{d.archivo}_list_screen.dart';" for d in clases_datos)
+    imports_list_screens = "\n".join(f"import 'screens/{d.archivo}_list_screen.dart';" for d in clases_datos)
     items = "\n".join(
         f"""          Card(
             child: ListTile(
@@ -714,12 +1366,29 @@ def _renderizar_main(nombre_proyecto: str, clases_datos: list[DatosClase]) -> st
           ),"""
         for d in clases_datos
     )
-    return f"""// Generado automáticamente (CU15).
+    # CU14 — conteo de operaciones pendientes/fallidas de TODAS las clases,
+    # para el aviso en la pantalla principal (cada clase se enumera
+    # explícitamente, Dart no tiene reflexión para iterarlas genéricamente).
+    conteos = ",\n".join(
+        f"      {nombre_campo_java(d.nombre_dart)}Repositorio.contarPendientes()" for d in clases_datos
+    )
+    return f"""// Generado automáticamente (CU15/CU14).
 import 'package:flutter/material.dart';
 
-{imports}
+import 'offline/conectividad.dart';
+import 'offline/db.dart';
+import 'offline/sync_manager.dart';
+import 'screens/sincronizacion_screen.dart';
+{imports_list_screens}
 
-void main() {{
+void main() async {{
+  WidgetsFlutterBinding.ensureInitialized();
+  await OfflineDb.instancia();
+  // CU14 — sincroniza automáticamente al reconectar, y una vez al abrir la
+  // app por si quedaron operaciones pendientes de una sesión anterior y ya
+  // hay conexión.
+  Conectividad.escucharReconexion(() => SyncManager.sincronizarTodo());
+  SyncManager.sincronizarTodo();
   runApp(const GeneratedApp());
 }}
 
@@ -739,14 +1408,63 @@ class GeneratedApp extends StatelessWidget {{
 class HomeScreen extends StatelessWidget {{
   const HomeScreen({{super.key}});
 
+  Future<int> _contarPendientesTotal() async {{
+    final conteos = await Future.wait<int>([
+{conteos}
+    ]);
+    return conteos.fold<int>(0, (acumulado, c) => acumulado + c);
+  }}
+
   @override
   Widget build(BuildContext context) {{
     return Scaffold(
-      appBar: AppBar(title: const Text('{nombre_proyecto}')),
-      body: ListView(
-        padding: const EdgeInsets.all(8),
+      appBar: AppBar(
+        title: const Text('{nombre_proyecto}'),
+        actions: [
+          FutureBuilder<bool>(
+            future: Conectividad.estaConectado(),
+            builder: (context, snapshot) {{
+              final conectado = snapshot.data ?? true;
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Icon(
+                  conectado ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
+                  size: 20,
+                ),
+              );
+            }},
+          ),
+        ],
+      ),
+      body: Column(
         children: [
+          FutureBuilder<int>(
+            future: _contarPendientesTotal(),
+            builder: (context, snapshot) {{
+              final pendientes = snapshot.data ?? 0;
+              return ListTile(
+                leading: const Icon(Icons.sync),
+                title: const Text('Sincronización'),
+                subtitle: Text(
+                  pendientes == 0 ? 'Todo sincronizado' : '$pendientes operación(es) pendiente(s)',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const SincronizacionScreen()),
+                ),
+              );
+            }},
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.all(8),
+              children: [
 {items}
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -768,6 +1486,10 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^1.2.0
+  sqflite: ^2.4.1
+  path: ^1.9.1
+  connectivity_plus: ^6.1.0
+  uuid: ^4.5.1
 
 dev_dependencies:
   flutter_test:
@@ -818,17 +1540,33 @@ def generar_zip_frontend(
             )
         )
 
+    # CU14 — orden de sincronización entre clases (padres antes que hijos).
+    clases_ordenadas = _orden_topologico(clases_datos, clases, relaciones)
+
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         raiz = slug
         zf.writestr(f"{raiz}/pubspec.yaml", _renderizar_pubspec(slug))
         zf.writestr(f"{raiz}/lib/config.dart", _renderizar_config(url_base))
         zf.writestr(f"{raiz}/lib/main.dart", _renderizar_main(proyecto.nombre, clases_datos))
+        zf.writestr(f"{raiz}/lib/offline/db.dart", _renderizar_offline_db(slug, clases_datos))
+        zf.writestr(f"{raiz}/lib/offline/conectividad.dart", _renderizar_conectividad())
+        zf.writestr(
+            f"{raiz}/lib/offline/sync_manager.dart", _renderizar_sync_manager(clases_ordenadas)
+        )
+        zf.writestr(
+            f"{raiz}/lib/screens/sincronizacion_screen.dart",
+            _renderizar_sincronizacion_screen(clases_datos),
+        )
 
         for datos in clases_datos:
             zf.writestr(f"{raiz}/lib/models/{datos.archivo}.dart", _renderizar_modelo(datos))
             zf.writestr(
                 f"{raiz}/lib/services/{datos.archivo}_service.dart", _renderizar_servicio(datos)
+            )
+            zf.writestr(
+                f"{raiz}/lib/offline/{datos.archivo}_repositorio.dart",
+                _renderizar_repositorio(datos),
             )
             zf.writestr(
                 f"{raiz}/lib/screens/{datos.archivo}_list_screen.dart",
