@@ -445,6 +445,49 @@
 /* Los estilos del lienzo (nodos de clase, aristas UML, controles) viven en
    diagram.css, importado por CanvasArea. */
 
+/* --- CU12 — vista previa de reconocimiento por foto -------------------- */
+
+.reconocimiento-preview__estado {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.reconocimiento-preview__resumen {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.reconocimiento-preview__lista {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.reconocimiento-preview__clase {
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-hover);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+
+.reconocimiento-preview__clase ul {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+  color: var(--text-secondary);
+}
+
+.reconocimiento-preview__relaciones {
+  font-size: var(--text-sm);
+}
+
+.reconocimiento-preview__relaciones ul {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+  color: var(--text-secondary);
+}
+
 /* --- CU13 — panel del agente conversacional --------------------------- */
 
 .agente-panel {

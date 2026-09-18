@@ -62,7 +62,7 @@ export function AppShell({ project }: { project: Proyecto }) {
           estadoConexion={diagrama.estadoConexion}
           colaboradores={diagrama.colaboradores}
           diagramaVacio={diagrama.estado === 'listo' && diagrama.nodes.length === 0}
-          onImportadoXmi={diagrama.importarDiagrama}
+          onDiagramaReemplazado={diagrama.importarDiagrama}
           comandoVoz={comandoVoz}
           agenteAbierto={agente.abierto}
           onToggleAgente={agente.toggleAbierto}

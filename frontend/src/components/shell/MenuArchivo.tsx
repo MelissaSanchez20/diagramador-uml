@@ -61,6 +61,21 @@ function IconDownload() {
   )
 }
 
+/** CU12 — ícono de cámara para "Reconocer desde foto". */
+function IconCamera() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <path
+        d="M1.5 4.5A1 1 0 012.5 3.5h1l.6-1h4.8l.6 1h1a1 1 0 011 1v6a1 1 0 01-1 1h-9a1 1 0 01-1-1v-6z"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+      <circle cx="7" cy="7.5" r="2.2" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  )
+}
+
 type ItemMenuProps = {
   icon?: ReactNode
   children: ReactNode
@@ -99,6 +114,8 @@ export type MenuArchivoProps = {
   importarXmiTooltip?: string
   importandoXmi: boolean
 
+  onReconocerFoto: () => void
+
   onGenerarBackend: () => void
   generandoBackend: boolean
 
@@ -115,6 +132,7 @@ export function MenuArchivo({
   importarXmiDeshabilitado,
   importarXmiTooltip,
   importandoXmi,
+  onReconocerFoto,
   onGenerarBackend,
   generandoBackend,
   mostrarGenerarFrontend,
@@ -174,6 +192,16 @@ export function MenuArchivo({
             }}
           >
             {importandoXmi ? 'Importando…' : 'Importar XMI'}
+          </ItemMenu>
+
+          <ItemMenu
+            icon={<IconCamera />}
+            onClick={() => {
+              onReconocerFoto()
+              cerrar()
+            }}
+          >
+            Reconocer desde foto
           </ItemMenu>
 
           <ItemMenu

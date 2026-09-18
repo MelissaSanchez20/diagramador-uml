@@ -17,6 +17,7 @@ import { ColaboradoresModal } from '../../pages/ColaboradoresModal'
 import { GenerarFrontendModal } from './GenerarFrontendModal'
 import type { FormatoReporte } from './MenuArchivo'
 import { MenuArchivo } from './MenuArchivo'
+import { ReconocimientoFotoModal } from './ReconocimientoFotoModal'
 import type { useComandoVoz } from './useComandoVoz'
 
 const MENSAJE_SIN_CONTENIDO = 'No hay contenido disponible para exportar. Agrega al menos una clase al diagrama.'
@@ -159,7 +160,7 @@ type ToolbarProps = {
   estadoConexion: EstadoConexion
   colaboradores: ColaboradorPresencia[]
   diagramaVacio: boolean
-  onImportadoXmi: (datos: DiagramaData) => void
+  onDiagramaReemplazado: (datos: DiagramaData) => void
   comandoVoz: ReturnType<typeof useComandoVoz>
   agenteAbierto: boolean
   onToggleAgente: () => void
@@ -222,7 +223,7 @@ export function Toolbar({
   estadoConexion,
   colaboradores,
   diagramaVacio,
-  onImportadoXmi,
+  onDiagramaReemplazado,
   comandoVoz,
   agenteAbierto,
   onToggleAgente,
@@ -239,7 +240,9 @@ export function Toolbar({
   const [importandoXmi, setImportandoXmi] = useState(false)
   const [errorImportacion, setErrorImportacion] = useState<string | null>(null)
   const [advertenciasImportacion, setAdvertenciasImportacion] = useState<string[]>([])
+  const [archivoFotoSeleccionado, setArchivoFotoSeleccionado] = useState<File | null>(null)
   const inputArchivoXmiRef = useRef<HTMLInputElement>(null)
+  const inputArchivoFotoRef = useRef<HTMLInputElement>(null)
   const esAdministrador = user?.id === project.id_administrador
 
   const handleLogout = () => {
@@ -275,13 +278,22 @@ export function Toolbar({
     setImportandoXmi(true)
     try {
       const resultado = await importarDiagramaXmi(project.id, archivo)
-      onImportadoXmi(resultado.diagrama)
+      onDiagramaReemplazado(resultado.diagrama)
       setAdvertenciasImportacion(resultado.advertencias)
     } catch (err) {
       setErrorImportacion(getApiErrorMessage(err, 'No se pudo importar el archivo XMI'))
     } finally {
       setImportandoXmi(false)
     }
+  }
+
+  // CU12 — reconocer diagrama desde foto: el archivo elegido se pasa al
+  // modal (ReconocimientoFotoModal), que se encarga de subirlo, mostrar la
+  // vista previa y confirmar -- este handler solo abre el modal.
+  const handleArchivoFotoSeleccionado = (e: ChangeEvent<HTMLInputElement>) => {
+    const archivo = e.target.files?.[0]
+    e.target.value = ''
+    if (archivo) setArchivoFotoSeleccionado(archivo)
   }
 
   // CU07 — el PDF se pide al backend (formato técnico: clases, atributos,
@@ -358,6 +370,7 @@ export function Toolbar({
               : undefined
           }
           importandoXmi={importandoXmi}
+          onReconocerFoto={() => inputArchivoFotoRef.current?.click()}
           onGenerarBackend={handleGenerarBackend}
           generandoBackend={generandoBackend}
           mostrarGenerarFrontend={esAdministrador}
@@ -372,6 +385,13 @@ export function Toolbar({
           accept=".xmi,.xml,text/xml,application/xml"
           className="app-toolbar__input-archivo"
           onChange={handleArchivoXmiSeleccionado}
+        />
+        <input
+          ref={inputArchivoFotoRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          className="app-toolbar__input-archivo"
+          onChange={handleArchivoFotoSeleccionado}
         />
         {esAdministrador && (
           <ToolButton icon={<IconUsers />} onClick={() => setMostrarColaboradores(true)}>
@@ -463,6 +483,14 @@ export function Toolbar({
       )}
       {mostrarModalFrontend && (
         <GenerarFrontendModal proyectoId={project.id} onClose={() => setMostrarModalFrontend(false)} />
+      )}
+      {archivoFotoSeleccionado && (
+        <ReconocimientoFotoModal
+          proyectoId={project.id}
+          archivo={archivoFotoSeleccionado}
+          onClose={() => setArchivoFotoSeleccionado(null)}
+          onAplicado={onDiagramaReemplazado}
+        />
       )}
     </header>
   )

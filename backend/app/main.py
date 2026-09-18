@@ -13,6 +13,7 @@ from app.routers import (
     diagramas,
     generacion,
     proyectos,
+    reconocimiento_foto,
     reportes,
     usuarios,
     ws_diagramas,
@@ -43,6 +44,7 @@ app.include_router(generacion.router)
 app.include_router(reportes.router)
 app.include_router(comandos_voz.router)
 app.include_router(agente.router)
+app.include_router(reconocimiento_foto.router)
 
 
 @app.get("/")
