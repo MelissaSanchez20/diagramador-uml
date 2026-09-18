@@ -7,6 +7,7 @@ import { CanvasArea } from './CanvasArea'
 import { RelacionEditorModal } from './RelacionEditorModal'
 import { Sidebar } from './Sidebar'
 import { Toolbar } from './Toolbar'
+import { useComandoVoz } from './useComandoVoz'
 import type { EdgeData } from './useDiagrama'
 import { nuevaClaseVacia, useDiagrama } from './useDiagrama'
 import './shell.css'
@@ -25,6 +26,7 @@ const RELACION_DEFAULT = {
 
 export function AppShell({ project }: { project: Proyecto }) {
   const diagrama = useDiagrama(project.id)
+  const comandoVoz = useComandoVoz(project.id, diagrama)
   const [modal, setModal] = useState<ModalDiagrama>(null)
   const [sidebarAbierto, setSidebarAbierto] = useState(true)
 
@@ -52,6 +54,7 @@ export function AppShell({ project }: { project: Proyecto }) {
           colaboradores={diagrama.colaboradores}
           diagramaVacio={diagrama.estado === 'listo' && diagrama.nodes.length === 0}
           onImportadoXmi={diagrama.importarDiagrama}
+          comandoVoz={comandoVoz}
         />
         <Sidebar
           clases={diagrama.nodes.map((n) => ({ id: n.id, nombre: n.data.clase.nombre }))}

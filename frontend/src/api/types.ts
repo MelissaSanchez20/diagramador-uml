@@ -104,3 +104,61 @@ export type DiagramaData = {
   clases: ClaseUml[]
   relaciones: RelacionUml[]
 }
+
+// --- CU11 — comandos de voz --------------------------------------------
+
+/** Atributo aún sin id: lo genera el cliente al aplicar la acción. */
+export type AtributoNuevo = {
+  nombre: string
+  tipo: string | null
+  visibilidad: Visibilidad
+}
+
+export type AccionCrearClase = {
+  accion: 'crear_clase'
+  nombre_clase: string
+  atributos: AtributoNuevo[]
+  resumen: string
+}
+
+export type AccionAgregarAtributo = {
+  accion: 'agregar_atributo'
+  id_clase: string
+  nombre_clase: string
+  atributo: AtributoNuevo
+  resumen: string
+}
+
+export type AccionEliminarClase = {
+  accion: 'eliminar_clase'
+  id_clase: string
+  nombre_clase: string
+  resumen: string
+}
+
+export type AccionCrearRelacion = {
+  accion: 'crear_relacion'
+  id_clase_origen: string
+  id_clase_destino: string
+  nombre_clase_origen: string
+  nombre_clase_destino: string
+  tipo: TipoRelacion
+  multiplicidad_origen: string | null
+  multiplicidad_destino: string | null
+  resumen: string
+}
+
+export type AccionRenombrarClase = {
+  accion: 'renombrar_clase'
+  id_clase: string
+  nombre_anterior: string
+  nombre_nuevo: string
+  resumen: string
+}
+
+export type AccionVoz =
+  | AccionCrearClase
+  | AccionAgregarAtributo
+  | AccionEliminarClase
+  | AccionCrearRelacion
+  | AccionRenombrarClase

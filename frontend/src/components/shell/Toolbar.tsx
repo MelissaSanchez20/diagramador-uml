@@ -17,6 +17,7 @@ import { ColaboradoresModal } from '../../pages/ColaboradoresModal'
 import { GenerarFrontendModal } from './GenerarFrontendModal'
 import type { FormatoReporte } from './MenuArchivo'
 import { MenuArchivo } from './MenuArchivo'
+import type { useComandoVoz } from './useComandoVoz'
 
 const MENSAJE_SIN_CONTENIDO = 'No hay contenido disponible para exportar. Agrega al menos una clase al diagrama.'
 
@@ -94,6 +95,24 @@ function IconUsers() {
   )
 }
 
+/** CU11 — ícono de micrófono, mismo lenguaje visual (trazo currentColor,
+ * strokeWidth 1.5) que el resto de los íconos de la toolbar. Pensado para
+ * convivir con un futuro botón de cámara (CU12) bajo la misma clase
+ * `.tool-btn--icon-circular`. */
+function IconMic() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <rect x="5" y="1" width="4" height="7" rx="2" stroke="currentColor" strokeWidth="1.5" />
+      <path
+        d="M2.5 6.5v.5a4.5 4.5 0 009 0v-.5M7 11.5v1.5M4.5 13h5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 const ETIQUETA_CONEXION: Record<EstadoConexion, string> = {
   conectado: 'En vivo',
   conectando: 'Conectando…',
@@ -141,6 +160,41 @@ type ToolbarProps = {
   colaboradores: ColaboradorPresencia[]
   diagramaVacio: boolean
   onImportadoXmi: (datos: DiagramaData) => void
+  comandoVoz: ReturnType<typeof useComandoVoz>
+}
+
+/**
+ * CU11 — botón circular de comando por voz. Estados: idle (outline),
+ * escuchando (relleno + anillo pulsante) y procesando (disabled). La clase
+ * `.tool-btn--icon-circular` es la base compartida que reusará el futuro
+ * botón de cámara de CU12 -- mismo tamaño/forma/tratamiento de estados.
+ */
+function BotonComandoVoz({ comandoVoz }: { comandoVoz: ReturnType<typeof useComandoVoz> }) {
+  const { soportado, escuchando, procesando, iniciarEscucha } = comandoVoz
+  const titulo = !soportado
+    ? 'Tu navegador no soporta reconocimiento de voz'
+    : escuchando
+      ? 'Escuchando…'
+      : procesando
+        ? 'Interpretando el comando…'
+        : 'Comando de voz'
+
+  return (
+    <button
+      type="button"
+      className={
+        'tool-btn--icon-circular' +
+        (escuchando ? ' tool-btn--icon-circular-activo' : '') +
+        (procesando ? ' tool-btn--icon-circular-procesando' : '')
+      }
+      disabled={!soportado || procesando}
+      title={titulo}
+      aria-label={titulo}
+      onClick={iniciarEscucha}
+    >
+      <IconMic />
+    </button>
+  )
 }
 
 export function Toolbar({
@@ -153,6 +207,7 @@ export function Toolbar({
   colaboradores,
   diagramaVacio,
   onImportadoXmi,
+  comandoVoz,
 }: ToolbarProps) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
@@ -272,6 +327,7 @@ export function Toolbar({
         <ToolButton icon={<IconFit />} onClick={() => fitView({ padding: 0.25 })}>
           Ajustar vista
         </ToolButton>
+        <BotonComandoVoz comandoVoz={comandoVoz} />
         <MenuArchivo
           onImportarXmi={() => inputArchivoXmiRef.current?.click()}
           importarXmiDeshabilitado={!diagramaVacio}
@@ -330,6 +386,22 @@ export function Toolbar({
           <span className="app-toolbar__error">
             {errorImportacion}
             <button type="button" className="app-toolbar__reintentar" onClick={() => setErrorImportacion(null)}>
+              Cerrar
+            </button>
+          </span>
+        )}
+        {comandoVoz.error && (
+          <span className="app-toolbar__error">
+            {comandoVoz.error}
+            <button type="button" className="app-toolbar__reintentar" onClick={comandoVoz.cerrarError}>
+              Cerrar
+            </button>
+          </span>
+        )}
+        {comandoVoz.mensajeConfirmacion && (
+          <span className="app-toolbar__confirmacion-voz">
+            {comandoVoz.mensajeConfirmacion}
+            <button type="button" className="app-toolbar__reintentar" onClick={comandoVoz.cerrarConfirmacion}>
               Cerrar
             </button>
           </span>

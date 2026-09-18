@@ -11,6 +11,13 @@ class Settings(BaseSettings):
 
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:5174"
 
+    # CU11 — interpretación de comandos de voz vía function calling. Opcional
+    # (no requerida al arrancar) para no romper `pytest`/entornos sin la key
+    # configurada todavía -- `app/services/comandos_voz.py` valida que esté
+    # presente recién al momento de llamar a la API, con un error claro.
+    OPENAI_API_KEY: str | None = None
+    OPENAI_MODEL: str = "gpt-4o-mini"
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property

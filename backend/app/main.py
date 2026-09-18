@@ -8,6 +8,7 @@ from app.db.session import get_db
 from app.routers import (
     auth,
     colaboradores,
+    comandos_voz,
     diagramas,
     generacion,
     proyectos,
@@ -39,6 +40,7 @@ app.include_router(diagramas.router)
 app.include_router(ws_diagramas.router)
 app.include_router(generacion.router)
 app.include_router(reportes.router)
+app.include_router(comandos_voz.router)
 
 
 @app.get("/")
