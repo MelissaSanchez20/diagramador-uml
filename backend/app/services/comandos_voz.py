@@ -15,6 +15,12 @@ Yjs (CU10). Así se evita duplicar validación/persistencia/ids nuevos.
 monkeypatchea en los tests (`backend/tests/test_comandos_voz.py`) para no
 pegarle nunca a la API real, mismo patrón que ya usa
 `test_ws_diagramas.py` (`monkeypatch.setattr(yjs_rooms, "DEBOUNCE_SEGUNDOS", ...)`).
+
+`construir_tools()` y `resolver_accion()` son públicas a propósito: CU13
+(`app/services/agente.py`) las reutiliza tal cual para no duplicar las 5
+tools de function calling ni la resolución nombre→id -- ve su propia llamada
+a OpenAI (multi-turno, con historial) pero comparte este mismo "motor" de
+acciones.
 """
 
 from __future__ import annotations
@@ -59,7 +65,7 @@ class ComandoVozNoDisponibleError(Exception):
     crudo del proveedor externo."""
 
 
-def _construir_tools() -> list[dict]:
+def construir_tools() -> list[dict]:
     visibilidades = [v.value for v in VisibilidadMiembro]
     tipos_relacion = [t.value for t in TipoRelacion]
     multiplicidades = sorted(MULTIPLICIDADES_VALIDAS)
@@ -214,7 +220,7 @@ def _llamar_openai(texto: str, prompt_sistema: str) -> tuple[str | None, dict | 
                 {"role": "system", "content": prompt_sistema},
                 {"role": "user", "content": texto},
             ],
-            tools=_construir_tools(),
+            tools=construir_tools(),
             tool_choice="auto",
         )
     except (APIConnectionError, APITimeoutError, RateLimitError, APIStatusError) as err:
@@ -351,13 +357,21 @@ _MANEJADORES = {
 }
 
 
-def interpretar_comando(proyecto_id: int, texto: str, db: Session) -> AccionVoz:
-    diagrama = cargar_diagrama(proyecto_id, db)
-    prompt = _prompt_sistema(diagrama)
-    nombre_tool, argumentos = _llamar_openai(texto, prompt)
-
+def resolver_accion(nombre_tool: str | None, argumentos: dict | None, clases: list[ClaseIO]) -> AccionVoz:
+    """Dado el nombre/argumentos de una tool ya devuelta por OpenAI (propios o
+    de CU13), despacha al manejador de la acción correspondiente y arma la
+    `AccionVoz` con ids ya resueltos. Levanta `ComandoVozInvalidoError` si
+    `nombre_tool` es `None` (no hubo tool_call) o no corresponde a ninguna de
+    las 5 acciones soportadas."""
     manejador = _MANEJADORES.get(nombre_tool) if nombre_tool else None
     if manejador is None:
         raise ComandoVozInvalidoError(MENSAJE_NO_SOPORTADO)
 
-    return manejador(argumentos, diagrama.clases)
+    return manejador(argumentos, clases)
+
+
+def interpretar_comando(proyecto_id: int, texto: str, db: Session) -> AccionVoz:
+    diagrama = cargar_diagrama(proyecto_id, db)
+    prompt = _prompt_sistema(diagrama)
+    nombre_tool, argumentos = _llamar_openai(texto, prompt)
+    return resolver_accion(nombre_tool, argumentos, diagrama.clases)

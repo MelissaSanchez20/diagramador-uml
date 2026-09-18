@@ -162,3 +162,23 @@ export type AccionVoz =
   | AccionEliminarClase
   | AccionCrearRelacion
   | AccionRenombrarClase
+
+// --- CU13 — agente conversacional ---------------------------------------
+
+export type RolMensajeChat = 'usuario' | 'agente'
+
+/** Mensaje mostrado en el panel del agente. `accion` (si vino) es para el
+ * indicador visual de "acción aplicada"; `esError` distingue un mensaje de
+ * error de red/servicio de una respuesta normal del agente. */
+export type MensajeChat = {
+  id: string
+  rol: RolMensajeChat
+  texto: string
+  accion?: AccionVoz | null
+  esError?: boolean
+}
+
+export type AgenteRespuesta = {
+  texto: string
+  accion: AccionVoz | null
+}

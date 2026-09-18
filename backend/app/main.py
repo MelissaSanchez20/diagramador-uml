@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import get_db
 from app.routers import (
+    agente,
     auth,
     colaboradores,
     comandos_voz,
@@ -41,6 +42,7 @@ app.include_router(ws_diagramas.router)
 app.include_router(generacion.router)
 app.include_router(reportes.router)
 app.include_router(comandos_voz.router)
+app.include_router(agente.router)
 
 
 @app.get("/")

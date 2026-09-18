@@ -2,9 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { interpretarComandoVoz } from '../../api/comandosVoz'
 import { getApiErrorMessage } from '../../api/errors'
-import type { AtributoUml } from '../../api/types'
+import { aplicarAccionVoz } from './aplicarAccionVoz'
 import type { useDiagrama } from './useDiagrama'
-import { nuevaClaseVacia } from './useDiagrama'
 
 /**
  * CU11 — tipos mínimos de la Web Speech API (no vienen en el lib.dom.d.ts de
@@ -89,62 +88,7 @@ export function useComandoVoz(proyectoId: number, diagrama: Diagrama) {
     setError(null)
     interpretarComandoVoz(proyectoId, texto)
       .then((resultado) => {
-        const d = diagramaRef.current
-        switch (resultado.accion) {
-          case 'crear_clase': {
-            const clase = nuevaClaseVacia(d.nodes.length)
-            clase.nombre = resultado.nombre_clase
-            clase.atributos = resultado.atributos.map((a) => ({
-              id: crypto.randomUUID(),
-              nombre: a.nombre,
-              tipo: a.tipo,
-              visibilidad: a.visibilidad,
-              orden: 0,
-            }))
-            d.agregarClase(clase)
-            break
-          }
-          case 'agregar_atributo': {
-            const nodo = d.nodes.find((n) => n.id === resultado.id_clase)
-            if (nodo) {
-              const nuevoAtributo: AtributoUml = {
-                id: crypto.randomUUID(),
-                nombre: resultado.atributo.nombre,
-                tipo: resultado.atributo.tipo,
-                visibilidad: resultado.atributo.visibilidad,
-                orden: nodo.data.clase.atributos.length,
-              }
-              d.actualizarClase({ ...nodo.data.clase, atributos: [...nodo.data.clase.atributos, nuevoAtributo] })
-            }
-            break
-          }
-          case 'eliminar_clase': {
-            d.eliminarClase(resultado.id_clase)
-            break
-          }
-          case 'crear_relacion': {
-            d.crearRelacion(
-              {
-                source: resultado.id_clase_origen,
-                target: resultado.id_clase_destino,
-                sourceHandle: null,
-                targetHandle: null,
-              },
-              {
-                tipo: resultado.tipo,
-                etiqueta: null,
-                multiplicidad_origen: resultado.multiplicidad_origen,
-                multiplicidad_destino: resultado.multiplicidad_destino,
-              },
-            )
-            break
-          }
-          case 'renombrar_clase': {
-            const nodo = d.nodes.find((n) => n.id === resultado.id_clase)
-            if (nodo) d.actualizarClase({ ...nodo.data.clase, nombre: resultado.nombre_nuevo })
-            break
-          }
-        }
+        aplicarAccionVoz(resultado, diagramaRef.current)
         confirmarAccion(resultado.resumen)
       })
       .catch((err) => {

@@ -161,6 +161,22 @@ type ToolbarProps = {
   diagramaVacio: boolean
   onImportadoXmi: (datos: DiagramaData) => void
   comandoVoz: ReturnType<typeof useComandoVoz>
+  agenteAbierto: boolean
+  onToggleAgente: () => void
+}
+
+/** CU13 — ícono de burbuja de chat para el botón "Asistente". */
+function IconChat() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <path
+        d="M1.5 3.5A1.5 1.5 0 013 2h8a1.5 1.5 0 011.5 1.5v5A1.5 1.5 0 0111 10H5.5L2.5 12v-2H3a1.5 1.5 0 01-1.5-1.5v-5z"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
 }
 
 /**
@@ -208,6 +224,8 @@ export function Toolbar({
   diagramaVacio,
   onImportadoXmi,
   comandoVoz,
+  agenteAbierto,
+  onToggleAgente,
 }: ToolbarProps) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
@@ -328,6 +346,9 @@ export function Toolbar({
           Ajustar vista
         </ToolButton>
         <BotonComandoVoz comandoVoz={comandoVoz} />
+        <ToolButton icon={<IconChat />} primary={agenteAbierto} onClick={onToggleAgente}>
+          Asistente
+        </ToolButton>
         <MenuArchivo
           onImportarXmi={() => inputArchivoXmiRef.current?.click()}
           importarXmiDeshabilitado={!diagramaVacio}

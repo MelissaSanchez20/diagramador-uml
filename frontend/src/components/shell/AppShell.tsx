@@ -3,10 +3,12 @@ import { ReactFlowProvider } from 'reactflow'
 import type { Connection, Edge } from 'reactflow'
 
 import type { Proyecto } from '../../api/types'
+import { AgentePanel } from './AgentePanel'
 import { CanvasArea } from './CanvasArea'
 import { RelacionEditorModal } from './RelacionEditorModal'
 import { Sidebar } from './Sidebar'
 import { Toolbar } from './Toolbar'
+import { useAgente } from './useAgente'
 import { useComandoVoz } from './useComandoVoz'
 import type { EdgeData } from './useDiagrama'
 import { nuevaClaseVacia, useDiagrama } from './useDiagrama'
@@ -27,6 +29,7 @@ const RELACION_DEFAULT = {
 export function AppShell({ project }: { project: Proyecto }) {
   const diagrama = useDiagrama(project.id)
   const comandoVoz = useComandoVoz(project.id, diagrama)
+  const agente = useAgente(project.id, diagrama)
   const [modal, setModal] = useState<ModalDiagrama>(null)
   const [sidebarAbierto, setSidebarAbierto] = useState(true)
 
@@ -43,7 +46,13 @@ export function AppShell({ project }: { project: Proyecto }) {
 
   return (
     <ReactFlowProvider>
-      <div className={sidebarAbierto ? 'app-shell' : 'app-shell app-shell--sidebar-colapsado'}>
+      <div
+        className={
+          'app-shell' +
+          (sidebarAbierto ? '' : ' app-shell--sidebar-colapsado') +
+          (agente.abierto ? ' app-shell--agente-abierto' : '')
+        }
+      >
         <Toolbar
           project={project}
           onNuevaClase={abrirNuevaClase}
@@ -55,6 +64,8 @@ export function AppShell({ project }: { project: Proyecto }) {
           diagramaVacio={diagrama.estado === 'listo' && diagrama.nodes.length === 0}
           onImportadoXmi={diagrama.importarDiagrama}
           comandoVoz={comandoVoz}
+          agenteAbierto={agente.abierto}
+          onToggleAgente={agente.toggleAbierto}
         />
         <Sidebar
           clases={diagrama.nodes.map((n) => ({ id: n.id, nombre: n.data.clase.nombre }))}
@@ -79,6 +90,9 @@ export function AppShell({ project }: { project: Proyecto }) {
           onDeshacer={diagrama.deshacer}
           onRehacer={diagrama.rehacer}
         />
+        {agente.abierto && (
+          <AgentePanel mensajes={agente.mensajes} enviando={agente.enviando} onEnviar={agente.enviarMensaje} />
+        )}
       </div>
 
       {modal?.tipo === 'relacion-nueva' && (
