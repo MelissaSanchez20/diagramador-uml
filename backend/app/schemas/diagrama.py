@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.atributo import VisibilidadMiembro
@@ -50,6 +52,10 @@ class RelacionIO(BaseModel):
     multiplicidad_destino: str | None = None
     handle_origen: str | None = None
     handle_destino: str | None = None
+    # Solo visuales -- ver el comentario en `app/models/relacion.py`.
+    forma: Literal["RECTA", "L", "CURVA"] | None = None
+    desvio_x: float | None = None
+    desvio_y: float | None = None
 
 
 class DiagramaIO(BaseModel):

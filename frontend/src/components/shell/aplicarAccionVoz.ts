@@ -56,6 +56,7 @@ export function aplicarAccionVoz(accion: AccionVoz, diagrama: Diagrama): void {
           etiqueta: null,
           multiplicidad_origen: accion.multiplicidad_origen,
           multiplicidad_destino: accion.multiplicidad_destino,
+          forma: null,
         },
       )
       break

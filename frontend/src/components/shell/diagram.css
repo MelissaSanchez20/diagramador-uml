@@ -7,10 +7,11 @@
 .class-node {
   min-width: 176px;
   background: var(--node-body-bg);
-  border: var(--border-hairline) solid var(--border-strong);
+  border: var(--border-hairline) solid var(--node-border);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   color: var(--text-primary);
+  box-shadow: var(--shadow-popover);
 }
 
 .class-node--selected {
@@ -252,7 +253,9 @@
 /* --- Aristas UML ------------------------------------------------------- */
 
 .app-canvas .react-flow__edge-path {
-  stroke: var(--border-strong);
+  /* El color real se setea inline por arista (EDGE_STYLE en useDiagrama.ts,
+     un literal, no var() -- ver comentario ahí) y siempre gana sobre esta
+     regla de clase; esto solo cubre stroke-width. */
   stroke-width: 1.5;
 }
 
@@ -269,7 +272,7 @@
   padding: 0 3px;
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   background: var(--canvas-bg);
   pointer-events: none;
   white-space: nowrap;
@@ -280,7 +283,7 @@
   padding: 1px 4px;
   font-family: var(--font-sans);
   font-size: 10px;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   background: var(--canvas-bg);
   border-radius: 2px;
   pointer-events: none;
@@ -351,4 +354,25 @@
 
 .app-canvas .react-flow__attribution a {
   color: var(--text-secondary);
+}
+
+/* Punto de control arrastrable de una relación (RelacionEdge.tsx), visible
+   solo con la arista seleccionada. pointer-events explícito: el contenedor
+   de EdgeLabelRenderer no recibe eventos por defecto. */
+.edge-control {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--canvas-bg);
+  border: 2px solid var(--accent, #2b4c7e);
+  box-shadow: 0 0 0 3px rgba(43, 76, 126, 0.15);
+  cursor: grab;
+  pointer-events: all;
+  touch-action: none;
+  z-index: 10;
+}
+
+.edge-control:active {
+  cursor: grabbing;
 }

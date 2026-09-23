@@ -20,7 +20,7 @@ sin pisar el resto de la clase/relación):
                                id, id_clase_origen, id_clase_destino, tipo,
                                etiqueta, multiplicidad_origen,
                                multiplicidad_destino, handle_origen,
-                               handle_destino,
+                               handle_destino, forma, desvio_x, desvio_y,
                            }]
 
 Cada cambio al documento se vuelca a las tablas normalizadas con debounce,

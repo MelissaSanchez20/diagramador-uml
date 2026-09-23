@@ -457,6 +457,18 @@
   color: var(--text-secondary);
 }
 
+/* Correcciones automáticas del backend (ej. composición sin rombo tomada
+   como asociación): informativas, no un error. */
+.reconocimiento-preview__advertencias {
+  margin: 0;
+  padding: 8px 12px 8px 28px;
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  background: #fdf6e3;
+  border: 1px solid #e8d9a8;
+  border-radius: 4px;
+}
+
 .reconocimiento-preview__lista {
   display: flex;
   flex-direction: column;

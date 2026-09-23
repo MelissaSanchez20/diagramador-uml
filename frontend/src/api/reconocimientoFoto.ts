@@ -8,6 +8,7 @@ export type RelacionDetectada = {
   clase_origen: string
   clase_destino: string
   tipo: TipoRelacion
+  etiqueta?: string | null
   multiplicidad_origen: string | null
   multiplicidad_destino: string | null
 }
@@ -20,6 +21,9 @@ export type ReconocimientoFotoResultado = {
   mensaje: string
   clases: ClaseDetectada[]
   relaciones: RelacionDetectada[]
+  /** Correcciones automáticas del backend sobre lo que devolvió el modelo
+   * (p. ej. una composición sin rombo dibujado tomada como asociación). */
+  advertencias?: string[]
 }
 
 export type ConfirmarReconocimientoResultado = {

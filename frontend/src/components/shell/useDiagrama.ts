@@ -4,7 +4,7 @@ import type { Connection, Edge, EdgeChange, Node, NodeChange } from 'reactflow'
 
 import { getDiagrama, guardarDiagrama } from '../../api/diagrama'
 import { getApiErrorMessage } from '../../api/errors'
-import type { ClaseUml, DiagramaData, RelacionUml, TipoRelacion } from '../../api/types'
+import type { ClaseUml, DiagramaData, FormaRelacion, RelacionUml, TipoRelacion } from '../../api/types'
 import { useAuth } from '../../auth/useAuth'
 import { useColaboracion } from '../../collab/useColaboracion'
 import type { ClassNodeData } from './ClassNode'
@@ -15,6 +15,9 @@ export type EdgeData = {
   etiqueta: string | null
   multiplicidad_origen: string | null
   multiplicidad_destino: string | null
+  forma: FormaRelacion | null
+  desvio_x: number | null
+  desvio_y: number | null
 }
 
 export type DetallesRelacion = {
@@ -22,9 +25,19 @@ export type DetallesRelacion = {
   etiqueta: string | null
   multiplicidad_origen: string | null
   multiplicidad_destino: string | null
+  forma: FormaRelacion | null
 }
 
-const EDGE_STYLE = { stroke: 'var(--border-strong)' }
+export type Desvio = { x: number; y: number }
+
+// Literal, no var(--edge-stroke): mismo motivo que STROKE en UmlMarkers.tsx
+// (los estilos de SVG no resuelven var() de forma confiable) -- acá además
+// se confirmó que rompe la exportación a PNG (CU07 "Imagen"): html-to-image
+// clona el SVG de React Flow sin resolver custom properties para elementos
+// SVG, así que un var() sin resolver cae al valor inicial de `stroke`
+// (`none`) y la línea queda invisible en el archivo exportado. Mantener en
+// sync con --edge-stroke en tokens.css si ese valor cambia.
+const EDGE_STYLE = { stroke: '#4a5261' }
 const DEBOUNCE_MS = 800
 
 function nuevoId(): string {
@@ -67,13 +80,52 @@ function construirNodos(
   }))
 }
 
-function construirArista(r: RelacionUml): Edge<EdgeData> {
+type PosicionXY = { x: number; y: number }
+
+/**
+ * Fallback de render: cuando una relación no trae `handle_origen`/
+ * `handle_destino` (reconocimiento de foto CU12, importación XMI, CU11 por
+ * voz -- ninguno de los tres asigna un lado hoy), React Flow resuelve el
+ * handle faltante SIEMPRE al primero de la lista (`SIDES` en ClassNode.tsx
+ * empieza en `Position.Top`), así que todas las relaciones sin handle
+ * explícito terminaban amontonadas en el mismo punto arriba de cada clase,
+ * sin importar dónde esté la otra. Se calcula acá, en base a la posición
+ * ACTUAL de ambas clases, el lado cardinal dominante de cada extremo -- es
+ * deliberadamente una heurística simple (no un layout automático tipo
+ * dagre, fuera de alcance) y NO se persiste de vuelta a la BD: es pura
+ * decoración de render, recalculada cada vez a partir de `pos_x`/`pos_y`,
+ * así que también se autocorrige sola si las clases se mueven después.
+ */
+export function calcularHandlesPorPosicion(
+  posOrigen: PosicionXY,
+  posDestino: PosicionXY,
+): { origen: string; destino: string } {
+  const dx = posDestino.x - posOrigen.x
+  const dy = posDestino.y - posOrigen.y
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0 ? { origen: 'right', destino: 'left' } : { origen: 'left', destino: 'right' }
+  }
+  return dy >= 0 ? { origen: 'bottom', destino: 'top' } : { origen: 'top', destino: 'bottom' }
+}
+
+function construirArista(r: RelacionUml, posicionesPorId: Map<string, PosicionXY>): Edge<EdgeData> {
+  let sourceHandle = r.handle_origen ?? undefined
+  let targetHandle = r.handle_destino ?? undefined
+  if (!sourceHandle || !targetHandle) {
+    const posOrigen = posicionesPorId.get(r.id_clase_origen)
+    const posDestino = posicionesPorId.get(r.id_clase_destino)
+    if (posOrigen && posDestino) {
+      const calculados = calcularHandlesPorPosicion(posOrigen, posDestino)
+      sourceHandle = sourceHandle ?? calculados.origen
+      targetHandle = targetHandle ?? calculados.destino
+    }
+  }
   return {
     id: r.id,
     source: r.id_clase_origen,
     target: r.id_clase_destino,
-    sourceHandle: r.handle_origen ?? undefined,
-    targetHandle: r.handle_destino ?? undefined,
+    sourceHandle,
+    targetHandle,
     type: 'relacion',
     label: r.etiqueta ?? undefined,
     style: EDGE_STYLE,
@@ -82,13 +134,21 @@ function construirArista(r: RelacionUml): Edge<EdgeData> {
       etiqueta: r.etiqueta,
       multiplicidad_origen: r.multiplicidad_origen,
       multiplicidad_destino: r.multiplicidad_destino,
+      forma: r.forma ?? null,
+      desvio_x: r.desvio_x ?? null,
+      desvio_y: r.desvio_y ?? null,
     },
     ...markerDeRelacion(r.tipo),
   }
 }
 
-function construirAristas(relaciones: RelacionUml[]): Edge<EdgeData>[] {
-  return relaciones.map(construirArista)
+function posicionesPorIdDeClases(clases: ClaseUml[]): Map<string, PosicionXY> {
+  return new Map(clases.map((c) => [c.id, { x: c.pos_x, y: c.pos_y }]))
+}
+
+function construirAristas(relaciones: RelacionUml[], clases: ClaseUml[]): Edge<EdgeData>[] {
+  const posicionesPorId = posicionesPorIdDeClases(clases)
+  return relaciones.map((r) => construirArista(r, posicionesPorId))
 }
 
 /**
@@ -144,7 +204,16 @@ function mezclarNodosRemotos(
   return resultado
 }
 
-function mezclarAristasRemotas(actuales: Edge<EdgeData>[], relacionesRemotas: RelacionUml[]): Edge<EdgeData>[] {
+/** `idArrastrando`: arista cuyo punto de control se está arrastrando
+ * localmente ahora mismo -- conserva su desvío local (mismo criterio que
+ * `dragging` en mezclarNodosRemotos, para no pelear con el arrastre). */
+function mezclarAristasRemotas(
+  actuales: Edge<EdgeData>[],
+  relacionesRemotas: RelacionUml[],
+  clasesRemotas: ClaseUml[],
+  idArrastrando: string | null = null,
+): Edge<EdgeData>[] {
+  const posicionesPorId = posicionesPorIdDeClases(clasesRemotas)
   const remotasPorId = new Map(relacionesRemotas.map((r) => [r.id, r]))
   const vistos = new Set<string>()
   const resultado: Edge<EdgeData>[] = []
@@ -153,11 +222,19 @@ function mezclarAristasRemotas(actuales: Edge<EdgeData>[], relacionesRemotas: Re
     const remota = remotasPorId.get(arista.id)
     if (!remota) continue // se borró en otro lado
     vistos.add(arista.id)
-    resultado.push(construirArista(remota))
+    const nueva = construirArista(remota, posicionesPorId)
+    // Conservar la selección local: el punto de control arrastrable solo
+    // se muestra con la arista seleccionada, y cualquier cambio remoto (o un
+    // Ctrl+Z, que entra por este mismo camino) la deseleccionaría.
+    nueva.selected = arista.selected
+    if (arista.id === idArrastrando && arista.data && nueva.data) {
+      nueva.data = { ...nueva.data, desvio_x: arista.data.desvio_x, desvio_y: arista.data.desvio_y }
+    }
+    resultado.push(nueva)
   }
 
   for (const remota of relacionesRemotas) {
-    if (!vistos.has(remota.id)) resultado.push(construirArista(remota))
+    if (!vistos.has(remota.id)) resultado.push(construirArista(remota, posicionesPorId))
   }
 
   return resultado
@@ -195,6 +272,9 @@ function serializar(nodes: Node<ClassNodeData>[], edges: Edge<EdgeData>[]): Diag
         multiplicidad_destino: e.data?.multiplicidad_destino ?? null,
         handle_origen: e.sourceHandle ?? null,
         handle_destino: e.targetHandle ?? null,
+        forma: e.data?.forma ?? null,
+        desvio_x: e.data?.desvio_x ?? null,
+        desvio_y: e.data?.desvio_y ?? null,
       })),
   }
 }
@@ -217,6 +297,8 @@ export function useDiagrama(proyectoId: number) {
   // la sincronización con Yjs sin depender del orden de declaración —
   // mismo patrón que nodesRef/edgesRef.
   const colabPublicarRef = useRef<() => void>(() => {})
+  // Arista cuyo punto de control se está arrastrando (ver moverPuntoRelacion).
+  const arrastrandoAristaRef = useRef<string | null>(null)
 
   // Espejo siempre-actualizado de nodes/edges, para que el guardado diferido
   // (setTimeout) lea el estado más reciente sin importar cuándo se programó.
@@ -317,7 +399,7 @@ export function useDiagrama(proyectoId: number) {
     (datos: DiagramaData) => {
       yjsSincronizadoRef.current = true
       setNodes((nds) => mezclarNodosRemotos(nds, datos.clases, actualizarClase))
-      setEdges((eds) => mezclarAristasRemotas(eds, datos.relaciones))
+      setEdges((eds) => mezclarAristasRemotas(eds, datos.relaciones, datos.clases, arrastrandoAristaRef.current))
       setEstado('listo')
       cargadoRef.current = true
     },
@@ -349,7 +431,7 @@ export function useDiagrama(proyectoId: number) {
       .then((datos) => {
         if (!alive || yjsSincronizadoRef.current) return
         setNodes(construirNodos(datos.clases, actualizarClase))
-        setEdges(construirAristas(datos.relaciones))
+        setEdges(construirAristas(datos.relaciones, datos.clases))
         setEstado('listo')
         cargadoRef.current = true
       })
@@ -406,7 +488,7 @@ export function useDiagrama(proyectoId: number) {
   const importarDiagrama = useCallback(
     (datos: DiagramaData) => {
       setNodes(construirNodos(datos.clases, actualizarClase))
-      setEdges(construirAristas(datos.relaciones))
+      setEdges(construirAristas(datos.relaciones, datos.clases))
       guardarAhora()
     },
     [setNodes, setEdges, guardarAhora, actualizarClase],
@@ -427,7 +509,7 @@ export function useDiagrama(proyectoId: number) {
           type: 'relacion',
           label: detalles.etiqueta ?? undefined,
           style: EDGE_STYLE,
-          data: detalles,
+          data: { ...detalles, desvio_x: null, desvio_y: null },
           ...markerDeRelacion(detalles.tipo),
         },
       ])
@@ -437,15 +519,50 @@ export function useDiagrama(proyectoId: number) {
   )
 
   const actualizarRelacion = useCallback(
-    (id: string, detalles: DetallesRelacion) => {
+    (id: string, detalles: DetallesRelacion, invertir = false) => {
+      setEdges((eds) =>
+        eds.map((e) => {
+          if (e.id !== id) return e
+          // Invertir dirección: los tres pares (clases, handles,
+          // multiplicidades) se intercambian juntos -- las multiplicidades
+          // ya vienen swapeadas en `detalles` (el modal las invierte
+          // localmente), acá solo falta swapear origen/destino y sus
+          // handles para que sigan siendo el mismo par lógico.
+          const base = invertir
+            ? { ...e, source: e.target, target: e.source, sourceHandle: e.targetHandle, targetHandle: e.sourceHandle }
+            : e
+          // El desvío del punto de control se conserva (cambiar la forma o
+          // invertir no lo borra: es relativo al punto medio entre ambos
+          // extremos, que es el mismo en cualquier dirección).
+          const data: EdgeData = {
+            ...detalles,
+            desvio_x: e.data?.desvio_x ?? null,
+            desvio_y: e.data?.desvio_y ?? null,
+          }
+          return { ...base, label: detalles.etiqueta ?? undefined, data, ...markerDeRelacion(detalles.tipo) }
+        }),
+      )
+      guardarAhora()
+    },
+    [setEdges, guardarAhora],
+  )
+
+  // Punto de control arrastrable de una relación (RelacionEdge.tsx): durante
+  // el arrastre (`confirmar=false`) solo se actualiza el estado local, para
+  // que sea fluido; al soltar (`confirmar=true`) se guarda y se publica a
+  // Yjs una sola vez -- mismo criterio que onNodeDragStop, y un solo paso
+  // de Ctrl+Z. `desvio=null` lo vuelve al punto medio (doble clic).
+  const moverPuntoRelacion = useCallback(
+    (id: string, desvio: Desvio | null, confirmar: boolean) => {
+      arrastrandoAristaRef.current = confirmar ? null : id
       setEdges((eds) =>
         eds.map((e) =>
-          e.id === id
-            ? { ...e, label: detalles.etiqueta ?? undefined, data: detalles, ...markerDeRelacion(detalles.tipo) }
+          e.id === id && e.data
+            ? { ...e, data: { ...e.data, desvio_x: desvio?.x ?? null, desvio_y: desvio?.y ?? null } }
             : e,
         ),
       )
-      guardarAhora()
+      if (confirmar) guardarAhora()
     },
     [setEdges, guardarAhora],
   )
@@ -475,6 +592,7 @@ export function useDiagrama(proyectoId: number) {
     eliminarClase,
     crearRelacion,
     actualizarRelacion,
+    moverPuntoRelacion,
     eliminarRelacion,
     importarDiagrama,
     // CU10

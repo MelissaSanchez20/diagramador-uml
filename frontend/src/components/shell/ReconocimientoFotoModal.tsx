@@ -100,6 +100,14 @@ export function ReconocimientoFotoModal({ proyectoId, archivo, onClose, onAplica
         <div className="reconocimiento-preview">
           <p className="reconocimiento-preview__resumen">{resultado.mensaje}</p>
 
+          {resultado.advertencias && resultado.advertencias.length > 0 && (
+            <ul className="reconocimiento-preview__advertencias">
+              {resultado.advertencias.map((a, i) => (
+                <li key={i}>{a}</li>
+              ))}
+            </ul>
+          )}
+
           <div className="reconocimiento-preview__lista">
             {resultado.clases.map((clase, i) => (
               <div className="reconocimiento-preview__clase" key={i}>
@@ -124,7 +132,8 @@ export function ReconocimientoFotoModal({ proyectoId, archivo, onClose, onAplica
               <ul>
                 {resultado.relaciones.map((r, i) => (
                   <li key={i}>
-                    {r.clase_origen} → {r.clase_destino} ({ETIQUETA_TIPO[r.tipo] ?? r.tipo.toLowerCase()}
+                    {r.clase_origen} → {r.clase_destino}
+                    {r.etiqueta ? ` "${r.etiqueta}"` : ''} ({ETIQUETA_TIPO[r.tipo] ?? r.tipo.toLowerCase()}
                     {r.multiplicidad_origen || r.multiplicidad_destino
                       ? `, ${r.multiplicidad_origen ?? '?'} - ${r.multiplicidad_destino ?? '?'}`
                       : ''}

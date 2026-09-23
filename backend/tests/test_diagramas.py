@@ -256,3 +256,56 @@ def test_multiplicidad_invalida_devuelve_400(client, crear_usuario, crear_proyec
     resp = client.put(_url(proyecto.id), json=payload, headers=headers(admin))
     assert resp.status_code == 400
     assert "muchos" in resp.json()["detail"]
+
+
+def _payload_con_forma(forma, desvio_x=None, desvio_y=None):
+    return {
+        "clases": [
+            {"id": "clase-a", "nombre": "A", "pos_x": 0, "pos_y": 0},
+            {"id": "clase-b", "nombre": "B", "pos_x": 300, "pos_y": 0},
+        ],
+        "relaciones": [
+            {
+                "id": "rel-1",
+                "id_clase_origen": "clase-a",
+                "id_clase_destino": "clase-b",
+                "tipo": "ASOCIACION",
+                "forma": forma,
+                "desvio_x": desvio_x,
+                "desvio_y": desvio_y,
+            }
+        ],
+    }
+
+
+def test_forma_y_desvio_de_relacion_se_persisten(client, crear_usuario, crear_proyecto, headers):
+    admin = crear_usuario()
+    proyecto = crear_proyecto(admin)
+
+    resp = client.put(_url(proyecto.id), json=_payload_con_forma("CURVA", 12.5, -40), headers=headers(admin))
+    assert resp.status_code == 200
+
+    relacion = client.get(_url(proyecto.id), headers=headers(admin)).json()["relaciones"][0]
+    assert relacion["forma"] == "CURVA"
+    assert relacion["desvio_x"] == 12.5
+    assert relacion["desvio_y"] == -40
+
+
+def test_relacion_sin_forma_queda_en_null(client, crear_usuario, crear_proyecto, headers):
+    admin = crear_usuario()
+    proyecto = crear_proyecto(admin)
+
+    client.put(_url(proyecto.id), json=_payload_con_forma(None), headers=headers(admin))
+
+    relacion = client.get(_url(proyecto.id), headers=headers(admin)).json()["relaciones"][0]
+    assert relacion["forma"] is None
+    assert relacion["desvio_x"] is None
+    assert relacion["desvio_y"] is None
+
+
+def test_forma_invalida_devuelve_422(client, crear_usuario, crear_proyecto, headers):
+    admin = crear_usuario()
+    proyecto = crear_proyecto(admin)
+
+    resp = client.put(_url(proyecto.id), json=_payload_con_forma("ZIGZAG"), headers=headers(admin))
+    assert resp.status_code == 422

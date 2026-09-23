@@ -98,7 +98,14 @@ export type RelacionUml = {
   multiplicidad_destino: string | null
   handle_origen: string | null
   handle_destino: string | null
+  // Solo visuales (ver RelacionEdge.tsx): forma de la línea (null = RECTA) y
+  // corrimiento del punto de control respecto del punto medio entre extremos.
+  forma?: FormaRelacion | null
+  desvio_x?: number | null
+  desvio_y?: number | null
 }
+
+export type FormaRelacion = 'RECTA' | 'L' | 'CURVA'
 
 export type DiagramaData = {
   clases: ClaseUml[]

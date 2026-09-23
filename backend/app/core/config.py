@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     # presente recién al momento de llamar a la API, con un error claro.
     OPENAI_API_KEY: str | None = None
     OPENAI_MODEL: str = "gpt-4o-mini"
+    # CU12 — modelo aparte solo para el reconocimiento de diagramas por foto.
+    # Medido con una imagen real: gpt-4o-mini perdía clases e inventaba
+    # relaciones distintas en cada intento; gpt-4o, estable (ver encabezado
+    # de `app/services/reconocimiento_foto.py`). Comandos de voz y el agente
+    # siguen con OPENAI_MODEL (texto, no visión), sin encarecerlos.
+    OPENAI_VISION_MODEL: str = "gpt-4o"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

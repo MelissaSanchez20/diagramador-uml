@@ -14,11 +14,13 @@ el NOMBRE del tag es el rol/propiedad de contención (sin prefijo), y el
 METACLASE real se indica con el atributo `xmi:type="uml:Xxx"` — así es como
 lucen los XMI reales de EA, ArgoUML, Papyrus, StarUML, etc.
 
-**No se pudo verificar contra una instalación real de Enterprise Architect**
-(no hay una disponible en este entorno) — la estructura de abajo sigue el
-estándar UML2/XMI 2.1 y el namespace/patrón confirmado en un ejemplo real de
-EA, pero "debería importar en EA según el estándar" no es lo mismo que
-"se probó importándolo en EA". Ver limitaciones al final del archivo.
+**Verificado por la usuaria en una instalación real de Enterprise
+Architect** (2026-09-22): el archivo exportado se abre en EA y reconoce
+clases, atributos y relaciones del modelo. EA no crea el diagrama dibujado
+(el XMI no lleva layout, ver limitaciones al final del archivo): hay que
+arrastrar las clases al lienzo, y las relaciones aparecen solas. Se decidió
+dejarlo así. El mismo diagrama, re-exportado desde EA, es el fixture real
+del importador (`tests/fixtures/ea_pedidos.xmi`).
 
 Reutiliza `app/services/diagrama.py::cargar_clases_y_relaciones` — la misma
 lectura de `clases_uml`/`relaciones` que ya usan `generador_spring.py` (CU08)

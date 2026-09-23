@@ -1,19 +1,19 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 
-import type { TipoRelacion } from '../../api/types'
+import type { FormaRelacion, TipoRelacion } from '../../api/types'
 import { Button } from '../ui/Button'
 import { Modal } from '../ui/Modal'
 import { TextField } from '../ui/TextField'
 import type { DetallesRelacion } from './useDiagrama'
 import './diagramModals.css'
-import { OPCIONES_MULTIPLICIDAD, OPCIONES_TIPO_RELACION } from './umlFormat'
+import { OPCIONES_FORMA_RELACION, OPCIONES_MULTIPLICIDAD, OPCIONES_TIPO_RELACION } from './umlFormat'
 
 type Props = {
   titulo: string
   valorInicial: DetallesRelacion
   onClose: () => void
-  onGuardar: (detalles: DetallesRelacion) => void
+  onGuardar: (detalles: DetallesRelacion, invertir: boolean) => void
   onEliminar?: () => void
 }
 
@@ -22,16 +22,32 @@ export function RelacionEditorModal({ titulo, valorInicial, onClose, onGuardar, 
   const [etiqueta, setEtiqueta] = useState(valorInicial.etiqueta ?? '')
   const [multOrigen, setMultOrigen] = useState(valorInicial.multiplicidad_origen ?? '')
   const [multDestino, setMultDestino] = useState(valorInicial.multiplicidad_destino ?? '')
+  const [forma, setForma] = useState<FormaRelacion>(valorInicial.forma ?? 'RECTA')
+  const [invertida, setInvertida] = useState(false)
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
-    onGuardar({
-      tipo,
-      etiqueta: etiqueta.trim() || null,
-      multiplicidad_origen: multOrigen.trim() || null,
-      multiplicidad_destino: multDestino.trim() || null,
-    })
+    onGuardar(
+      {
+        tipo,
+        etiqueta: etiqueta.trim() || null,
+        multiplicidad_origen: multOrigen.trim() || null,
+        multiplicidad_destino: multDestino.trim() || null,
+        forma,
+      },
+      invertida,
+    )
     onClose()
+  }
+
+  // Swapea las multiplicidades ya en el propio formulario (feedback
+  // inmediato) — el origen/destino de las clases y sus handles se
+  // swapean recién al guardar (actualizarRelacion en useDiagrama.ts),
+  // que es quien tiene el edge real de React Flow.
+  const handleInvertir = () => {
+    setMultOrigen(multDestino)
+    setMultDestino(multOrigen)
+    setInvertida((v) => !v)
   }
 
   const handleEliminar = () => {
@@ -77,6 +93,34 @@ export function RelacionEditorModal({ titulo, valorInicial, onClose, onGuardar, 
             ))}
           </select>
         </div>
+
+        <div className="field">
+          <label className="field__label" htmlFor="relacion-forma">
+            Forma de la línea
+          </label>
+          <select
+            id="relacion-forma"
+            className="field__input"
+            value={forma}
+            onChange={(e) => setForma(e.target.value as FormaRelacion)}
+          >
+            {OPCIONES_FORMA_RELACION.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <p className="field__hint">
+            Seleccioná la línea en el lienzo y arrastrá el punto ● para moverla (doble clic sobre el punto la
+            vuelve al centro).
+          </p>
+        </div>
+
+        {onEliminar && (
+          <Button type="button" onClick={handleInvertir}>
+            {invertida ? '⇄ Dirección invertida' : '⇄ Invertir dirección'}
+          </Button>
+        )}
 
         <TextField
           label="Etiqueta"

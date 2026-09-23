@@ -1,4 +1,5 @@
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import pytest
 
@@ -303,6 +304,93 @@ def test_xml_valido_sin_clases_levanta_xmi_invalido_error():
     xml_sin_clases = b'<?xml version="1.0"?><raiz><algo/></raiz>'
     with pytest.raises(XmiInvalidoError, match="ninguna clase"):
         importar_xmi(xml_sin_clases)
+
+
+_FIXTURE_EA = Path(__file__).parent / "fixtures" / "ea_pedidos.xmi"
+
+
+def _relaciones_por_nombre(resultado):
+    nombres = {c.id: c.nombre for c in resultado.diagrama.clases}
+    return {
+        (nombres[r.id_clase_origen], nombres[r.id_clase_destino]): (r.tipo, r.multiplicidad_origen, r.multiplicidad_destino)
+        for r in resultado.diagrama.relaciones
+    }
+
+
+def test_archivo_real_exportado_por_enterprise_architect():
+    """Archivo REAL exportado por Enterprise Architect (el diagrama de
+    Pedidos de la usuaria, que a su vez salió de nuestro propio export).
+    EA repite cada clase dentro de su `xmi:Extension` y escribe las
+    referencias como hijos `<type xmi:idref>`/`<memberEnd xmi:idref>`: antes
+    se importaba cada clase dos veces (409 por nombre duplicado) y, detrás
+    de eso, se descartaban todas las relaciones."""
+    resultado = importar_xmi(_FIXTURE_EA.read_bytes())
+
+    nombres = [c.nombre for c in resultado.diagrama.clases]
+    assert sorted(nombres) == ["Cliente", "ItemPedido", "Pedido", "Producto"]
+    atributos = {c.nombre: [(a.nombre, a.tipo) for a in c.atributos] for c in resultado.diagrama.clases}
+    assert atributos["Cliente"] == [("email", "String"), ("Nombre", "String"), ("telefono", "String")]
+    assert atributos["ItemPedido"] == [("Cantidad", "String"), ("precioUnitario", "String")]
+
+    assert _relaciones_por_nombre(resultado) == {
+        ("Cliente", "Pedido"): (TipoRelacion.ASOCIACION, "1", "0..*"),
+        # Rombo relleno del lado de Pedido (el todo), como en el diagrama de EA.
+        ("Pedido", "ItemPedido"): (TipoRelacion.COMPOSICION, "1", "0..*"),
+        ("ItemPedido", "Producto"): (TipoRelacion.ASOCIACION, "0..*", "1"),
+    }
+    assert resultado.advertencias == []
+
+
+_XMI_EA_EXTENSION_E_IDREF_HIJOS = """<?xml version="1.0" encoding="UTF-8"?>
+<xmi:XMI xmi:version="2.1" xmlns:uml="http://schema.omg.org/spec/UML/2.1" xmlns:xmi="http://schema.omg.org/spec/XMI/2.1">
+  <uml:Model xmi:type="uml:Model" name="M">
+    <packagedElement xmi:type="uml:Class" xmi:id="A" name="Animal"/>
+    <packagedElement xmi:type="uml:Class" xmi:id="P" name="Perro">
+      <generalization xmi:type="uml:Generalization" xmi:id="g1">
+        <general xmi:idref="A"/>
+      </generalization>
+    </packagedElement>
+    <packagedElement xmi:type="uml:Class" xmi:id="D" name="Duenio"/>
+    <packagedElement xmi:type="uml:Association" xmi:id="as1" name="tiene">
+      <memberEnd xmi:idref="e1"/>
+      <memberEnd xmi:idref="e2"/>
+    </packagedElement>
+    <packagedElement xmi:type="uml:Package" xmi:id="pk" name="otro">
+      <ownedMember xmi:type="uml:Property" xmi:id="e1" association="as1">
+        <type xmi:idref="D"/>
+      </ownedMember>
+      <ownedMember xmi:type="uml:Property" xmi:id="e2" association="as1">
+        <type xmi:idref="P"/>
+        <upperValue xmi:type="uml:LiteralUnlimitedNatural" value="-1"/>
+        <lowerValue xmi:type="uml:LiteralInteger" value="0"/>
+      </ownedMember>
+    </packagedElement>
+  </uml:Model>
+  <xmi:Extension extender="Enterprise Architect">
+    <elements>
+      <element xmi:idref="A" xmi:type="uml:Class" name="Animal"/>
+      <element xmi:type="uml:Class" xmi:id="X" name="SoloEnLaExtension"/>
+    </elements>
+  </xmi:Extension>
+</xmi:XMI>
+"""
+
+
+def test_clases_dentro_de_xmi_extension_se_ignoran():
+    nombres = sorted(c.nombre for c in importar_xmi(_XMI_EA_EXTENSION_E_IDREF_HIJOS.encode("utf-8")).diagrama.clases)
+    # Ni la referencia repetida (Animal) ni una "clase" que solo existe en la extensión.
+    assert nombres == ["Animal", "Duenio", "Perro"]
+
+
+def test_referencias_como_hijo_xmi_idref_y_member_end_como_hijos():
+    resultado = importar_xmi(_XMI_EA_EXTENSION_E_IDREF_HIJOS.encode("utf-8"))
+    assert _relaciones_por_nombre(resultado) == {
+        # <general xmi:idref="A"/> como hijo de la generalización
+        ("Perro", "Animal"): (TipoRelacion.HERENCIA, None, None),
+        # memberEnd como hijos + <type xmi:idref> hijo de cada extremo
+        ("Duenio", "Perro"): (TipoRelacion.ASOCIACION, None, "0..*"),
+    }
+    assert resultado.advertencias == []
 
 
 def test_sanity_xmi_generado_es_parseable_por_elementtree():

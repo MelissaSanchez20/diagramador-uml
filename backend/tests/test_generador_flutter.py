@@ -277,3 +277,115 @@ def test_dos_relaciones_al_mismo_par_de_clases_flutter_coincide_con_spring(
     # aparecer en el modelo Dart, empaquetando/desempaquetando el id.
     assert "'miembro': {'id': miembroId}" in libro_dart
     assert "'miembro2': {'id': miembro2Id}" in libro_dart
+
+
+# --------------------------------------------------------------------------
+# Frontend generado listo para probar sin `flutter create .`: carpeta
+# android/ completa, README con instrucciones, solo Android (sin iOS).
+# --------------------------------------------------------------------------
+
+
+def test_generar_frontend_incluye_carpeta_android_lista_para_correr(
+    client, crear_usuario, crear_proyecto, headers, db_session
+):
+    admin = crear_usuario()
+    proyecto = crear_proyecto(admin)
+    _crear_diagrama_persona_direccion(db_session, proyecto)
+
+    resp = client.post(
+        f"/proyectos/{proyecto.id}/generar-frontend",
+        json={"url_base": "http://localhost:8080"},
+        headers=headers(admin),
+    )
+    assert resp.status_code == 200
+
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    nombres = zf.namelist()
+
+    esperados = [
+        "android/app/build.gradle.kts",
+        "android/settings.gradle.kts",
+        "android/build.gradle.kts",
+        "android/gradle.properties",
+        "android/gradle/wrapper/gradle-wrapper.properties",
+        "android/gradlew",
+        "android/gradlew.bat",
+        "android/app/src/main/AndroidManifest.xml",
+        "android/app/src/debug/AndroidManifest.xml",
+        "android/app/src/profile/AndroidManifest.xml",
+        "android/app/src/main/res/values/styles.xml",
+        "android/app/src/main/res/values-night/styles.xml",
+        "android/app/src/main/res/drawable/launch_background.xml",
+        "android/app/src/main/res/drawable-v21/launch_background.xml",
+    ]
+    for sufijo in esperados:
+        assert any(n.endswith(sufijo) for n in nombres), f"falta {sufijo}"
+
+    for densidad in ("mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"):
+        assert any(n.endswith(f"mipmap-{densidad}/ic_launcher.png") for n in nombres)
+
+    jar_path = next(n for n in nombres if n.endswith("gradle-wrapper.jar"))
+    assert len(zf.read(jar_path)) > 0
+
+    # Alcance explícito: solo Android, nada de iOS/web/desktop.
+    assert not any("/ios/" in n or n.startswith("ios/") for n in nombres)
+    assert not any("/web/" in n or n.startswith("web/") for n in nombres)
+
+
+def test_generar_frontend_android_usa_paquete_y_nombre_consistentes(
+    client, crear_usuario, crear_proyecto, headers, db_session
+):
+    admin = crear_usuario()
+    proyecto = crear_proyecto(admin)
+    _crear_diagrama_persona_direccion(db_session, proyecto)
+    slug = "".join(ch for ch in proyecto.nombre.lower() if ch.isalnum())
+    paquete = f"com.generado.{slug}"
+
+    resp = client.post(
+        f"/proyectos/{proyecto.id}/generar-frontend",
+        json={"url_base": "http://localhost:8080"},
+        headers=headers(admin),
+    )
+    assert resp.status_code == 200
+
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    nombres = zf.namelist()
+
+    build_gradle = zf.read(next(n for n in nombres if n.endswith("android/app/build.gradle.kts"))).decode(
+        "utf-8"
+    )
+    assert f'namespace = "{paquete}"' in build_gradle
+    assert f'applicationId = "{paquete}"' in build_gradle
+
+    ruta_esperada = f"android/app/src/main/kotlin/{paquete.replace('.', '/')}/MainActivity.kt"
+    main_activity_path = next(n for n in nombres if n.endswith(ruta_esperada))
+    main_activity = zf.read(main_activity_path).decode("utf-8")
+    assert f"package {paquete}" in main_activity
+
+    manifest = zf.read(next(n for n in nombres if n.endswith("android/app/src/main/AndroidManifest.xml"))).decode(
+        "utf-8"
+    )
+    assert f'android:label="{proyecto.nombre}"' in manifest
+
+
+def test_generar_frontend_incluye_readme(client, crear_usuario, crear_proyecto, headers, db_session):
+    admin = crear_usuario()
+    proyecto = crear_proyecto(admin)
+    _crear_diagrama_persona_direccion(db_session, proyecto)
+
+    resp = client.post(
+        f"/proyectos/{proyecto.id}/generar-frontend",
+        json={"url_base": "http://localhost:8080"},
+        headers=headers(admin),
+    )
+    assert resp.status_code == 200
+
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    readme_path = next(n for n in zf.namelist() if n.endswith("README.md"))
+    contenido = zf.read(readme_path).decode("utf-8")
+
+    assert "flutter pub get" in contenido
+    assert "flutter run" in contenido
+    # Menciona explícitamente que es solo Android -- no promete iOS/web.
+    assert "Android" in contenido
+    assert "no se genera `ios/`" in contenido

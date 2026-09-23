@@ -168,6 +168,78 @@ def test_dos_relaciones_al_mismo_par_de_clases_no_duplican_columna(
     assert "private Miembro miembro2;" in libro_java
 
 
+# --------------------------------------------------------------------------
+# Backend generado listo para probar sin configuración manual: H2 por
+# defecto, README con instrucciones, CORS abierto para desarrollo.
+# --------------------------------------------------------------------------
+
+
+def test_generar_backend_usa_h2_sin_placeholders_activos(client, crear_usuario, crear_proyecto, headers, db_session):
+    admin = crear_usuario()
+    proyecto = crear_proyecto(admin)
+    _crear_diagrama_persona_direccion(db_session, proyecto)
+
+    resp = client.post(f"/proyectos/{proyecto.id}/generar-backend", headers=headers(admin))
+    assert resp.status_code == 200
+
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    props_path = next(n for n in zf.namelist() if n.endswith("application.properties"))
+    contenido = zf.read(props_path).decode("utf-8")
+
+    assert "jdbc:h2:mem:" in contenido
+    assert "spring.datasource.username=sa" in contenido
+
+    # Ninguna línea ACTIVA (no comentada) debe seguir pidiendo completar
+    # placeholders de Postgres -- solo puede aparecer dentro del bloque
+    # comentado de ejemplo para quien quiera cambiar a Postgres.
+    lineas_activas = [l for l in contenido.splitlines() if l.strip() and not l.strip().startswith("#")]
+    assert not any("CAMBIAR_" in l for l in lineas_activas)
+
+    pom_path = next(n for n in zf.namelist() if n.endswith("pom.xml"))
+    contenido_pom = zf.read(pom_path).decode("utf-8")
+    assert "<artifactId>h2</artifactId>" in contenido_pom
+    assert "<artifactId>postgresql</artifactId>" in contenido_pom  # se mantiene disponible
+
+
+def test_generar_backend_incluye_readme_con_endpoints(client, crear_usuario, crear_proyecto, headers, db_session):
+    admin = crear_usuario()
+    proyecto = crear_proyecto(admin)
+    _crear_diagrama_persona_direccion(db_session, proyecto)
+
+    resp = client.post(f"/proyectos/{proyecto.id}/generar-backend", headers=headers(admin))
+    assert resp.status_code == 200
+
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    readme_path = next(n for n in zf.namelist() if n.endswith("README.md"))
+    contenido = zf.read(readme_path).decode("utf-8")
+
+    assert "mvn spring-boot:run" in contenido
+    assert "Java 17" in contenido
+    assert "8080" in contenido
+    assert "/api/personas" in contenido
+    assert "/api/direcciones" in contenido
+    assert "JWT" in contenido
+    assert "CORS" in contenido
+
+
+def test_generar_backend_incluye_cors_config_valido(client, crear_usuario, crear_proyecto, headers, db_session):
+    admin = crear_usuario()
+    proyecto = crear_proyecto(admin)
+    _crear_diagrama_persona_direccion(db_session, proyecto)
+
+    resp = client.post(f"/proyectos/{proyecto.id}/generar-backend", headers=headers(admin))
+    assert resp.status_code == 200
+
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    cors_path = next(n for n in zf.namelist() if n.endswith("config/CorsConfig.java"))
+    contenido = zf.read(cors_path).decode("utf-8")
+
+    assert "@Configuration" in contenido
+    assert "implements WebMvcConfigurer" in contenido
+    assert 'addMapping("/api/**")' in contenido
+    assert contenido.count("{") == contenido.count("}")
+
+
 def test_generar_backend_sin_clases_devuelve_400(client, crear_usuario, crear_proyecto, headers):
     admin = crear_usuario()
     proyecto = crear_proyecto(admin)  # sin clases en el diagrama

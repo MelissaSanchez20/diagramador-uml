@@ -4,7 +4,7 @@
  * Los colores son literales: los atributos de presentación SVG dentro de <marker>
  * no resuelven `var(--token)` de forma fiable entre navegadores.
  */
-const STROKE = '#b9c0cb' // --border-strong
+const STROKE = '#4a5261' // --edge-stroke
 const FILL_HOLLOW = '#ffffff' // --node-body-bg
 const FILL_SOLID = '#33383f' // --node-header-bg
 
@@ -27,26 +27,6 @@ export function UmlMarkers() {
             fill={FILL_HOLLOW}
             stroke={STROKE}
             strokeWidth="1"
-            strokeLinejoin="round"
-          />
-        </marker>
-
-        {/* Asociación dirigida: punta de flecha abierta (markerEnd) */}
-        <marker
-          id="uml-association"
-          markerWidth="14"
-          markerHeight="12"
-          refX="9"
-          refY="6"
-          orient="auto"
-          markerUnits="userSpaceOnUse"
-        >
-          <path
-            d="M1 1 L9 6 L1 11"
-            fill="none"
-            stroke={STROKE}
-            strokeWidth="1.2"
-            strokeLinecap="round"
             strokeLinejoin="round"
           />
         </marker>

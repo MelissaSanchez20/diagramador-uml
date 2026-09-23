@@ -32,8 +32,18 @@ Tolerancia: qué variaciones del estándar se tratan de interpretar
   ignorando a propósito con qué URI/prefijo esté declarado el namespace —
   XMI 2.1/2.4/2.5.1 usan URIs distintas para lo mismo. Ver `_local`/`_attr`.
 - **Clases anidadas en `uml:Package`** (no solo `packagedElement` directo
-  del `uml:Model`): se buscan con `root.iter()` (recorrido completo del
-  árbol), no solo entre los hijos directos del modelo.
+  del `uml:Model`): se busca en todo el árbol (`_elementos_del_modelo`),
+  no solo entre los hijos directos del modelo -- SALTEANDO los bloques
+  `xmi:Extension` (datos propios de cada herramienta, no modelo).
+- **Probado contra un archivo REAL exportado por Enterprise Architect**
+  (`tests/fixtures/ea_pedidos.xmi`, 2026-09-22) -- encontró dos bugs que los
+  XMI "estilo EA" escritos a mano no mostraban: (1) EA repite cada clase
+  dentro de su `xmi:Extension` (`<element xmi:idref=... xmi:type="uml:Class"
+  name=...>`), así que se importaba cada una dos veces y el guardado daba
+  409 por nombre duplicado; (2) EA escribe las referencias como HIJOS con
+  `xmi:idref` (`<type xmi:idref="X"/>`, `<memberEnd xmi:idref="X"/>`,
+  `<general xmi:idref="X"/>`) en vez de atributos planos -- las asociaciones
+  se descartaban todas. Ver `_elementos_del_modelo` y `_referencia`.
 - **Tipo de atributo como referencia interna** (`type="EAID_xxx"` apuntando
   a un `uml:PrimitiveType`/`uml:DataType` declarado en el mismo documento,
   el estilo típico de Enterprise Architect) además del `<type href="...#Foo"/>`
@@ -180,6 +190,40 @@ def _tipo_xmi_local(el: ET.Element) -> str | None:
     return valor.rsplit(":", 1)[-1]
 
 
+def _elementos_del_modelo(root: ET.Element):
+    """Como `root.iter()`, pero salteando todo subárbol `xmi:Extension`: es
+    el mecanismo estándar de XMI para datos PROPIOS de cada herramienta, no
+    parte del modelo. Enterprise Architect repite ahí cada clase
+    (`<element xmi:idref=... xmi:type="uml:Class" name=...>`, con datos de
+    dibujo) -- recorrerlo importaba cada clase dos veces (bug real, con un
+    archivo exportado por EA). OJO: el índice de ids (`importar_xmi`) sí
+    recorre el documento entero, porque EA declara ahí dentro los
+    `PrimitiveType` a los que apuntan los tipos de los atributos."""
+    pendientes = [root]
+    while pendientes:
+        el = pendientes.pop()
+        if _local(el.tag) == "Extension":
+            continue
+        yield el
+        pendientes.extend(reversed(list(el)))
+
+
+def _referencia(el: ET.Element, nombre_local: str) -> str | None:
+    """Una referencia IDREF que XMI permite escribir de dos formas: como
+    atributo plano (`type="X"`, estilo de nuestro exportador) o como hijo
+    con `xmi:idref` (`<type xmi:idref="X"/>`, estilo de Enterprise
+    Architect). Antes solo se leía la primera y todas las asociaciones de
+    un archivo de EA se descartaban."""
+    valor = _attr(el, nombre_local)
+    if valor:
+        return valor
+    for hijo in _hijos(el, nombre_local):
+        idref = _attr_xmi(hijo, "idref")
+        if idref:
+            return idref
+    return None
+
+
 def _hijos(el: ET.Element, nombre_local: str) -> list[ET.Element]:
     """Hijos DIRECTOS de `el` cuyo tag (nombre de rol de contención, ej.
     `ownedAttribute`) coincide por nombre local, sin importar namespace."""
@@ -272,8 +316,12 @@ def _parsear_clases(
     clases: list[ClaseIO] = []
     id_externo_a_interno: dict[str, str] = {}
 
-    for clase_el in root.iter():
+    for clase_el in _elementos_del_modelo(root):
         if _tipo_xmi_local(clase_el) != "Class":
+            continue
+        # Una referencia a una clase (solo `xmi:idref`, sin `xmi:id`) no es
+        # su definición -- segunda defensa además de saltear xmi:Extension.
+        if _attr_xmi(clase_el, "id") is None and _attr_xmi(clase_el, "idref") is not None:
             continue
 
         nombre = (clase_el.get("name") or "").strip()
@@ -328,15 +376,17 @@ def _parsear_clases(
 def _parsear_generalizaciones(
     root: ET.Element, id_externo_a_interno: dict[str, str], advertencias: list[str]
 ) -> list[RelacionIO]:
-    padre_de: dict[ET.Element, ET.Element] = {hijo: padre for padre in root.iter() for hijo in padre}
+    padre_de: dict[ET.Element, ET.Element] = {
+        hijo: padre for padre in _elementos_del_modelo(root) for hijo in padre
+    }
     relaciones: list[RelacionIO] = []
 
-    for gen_el in root.iter():
+    for gen_el in _elementos_del_modelo(root):
         if _tipo_xmi_local(gen_el) != "Generalization":
             continue
 
-        general_ext = _attr(gen_el, "general")
-        specific_ext = _attr(gen_el, "specific")
+        general_ext = _referencia(gen_el, "general")
+        specific_ext = _referencia(gen_el, "specific")
         if specific_ext is None:
             padre = padre_de.get(gen_el)
             specific_ext = _attr_xmi(padre, "id") if padre is not None else None
@@ -366,7 +416,7 @@ def _parsear_asociaciones(
     root: ET.Element, id_externo_a_interno: dict[str, str], advertencias: list[str]
 ) -> list[RelacionIO]:
     propiedades_por_id: dict[str, ET.Element] = {}
-    for el in root.iter():
+    for el in _elementos_del_modelo(root):
         if _tipo_xmi_local(el) == "Property":
             xid = _attr_xmi(el, "id")
             if xid:
@@ -374,18 +424,21 @@ def _parsear_asociaciones(
 
     relaciones: list[RelacionIO] = []
 
-    for assoc_el in root.iter():
+    for assoc_el in _elementos_del_modelo(root):
         if _tipo_xmi_local(assoc_el) != "Association":
             continue
 
         nombre_assoc = assoc_el.get("name")
-        member_end = _attr(assoc_el, "memberEnd")
+        # memberEnd puede venir como atributo con ids separados por espacios
+        # (nuestro exportador) o como hijos `<memberEnd xmi:idref=.../>` (EA).
+        ids_member_end = (_attr(assoc_el, "memberEnd") or "").split() + [
+            idref for hijo in _hijos(assoc_el, "memberEnd") if (idref := _attr_xmi(hijo, "idref"))
+        ]
         extremos: list[ET.Element] = []
-        if member_end:
-            for xid in member_end.split():
-                prop = propiedades_por_id.get(xid)
-                if prop is not None:
-                    extremos.append(prop)
+        for xid in dict.fromkeys(ids_member_end):  # sin repetidos, conservando el orden
+            prop = propiedades_por_id.get(xid)
+            if prop is not None:
+                extremos.append(prop)
         if not extremos:
             extremos = _hijos(assoc_el, "ownedEnd")
 
@@ -402,8 +455,8 @@ def _parsear_asociaciones(
             )
         extremo_a, extremo_b = extremos[0], extremos[1]
 
-        tipo_a = _attr(extremo_a, "type")
-        tipo_b = _attr(extremo_b, "type")
+        tipo_a = _referencia(extremo_a, "type")
+        tipo_b = _referencia(extremo_b, "type")
         clase_a = id_externo_a_interno.get(tipo_a) if tipo_a else None
         clase_b = id_externo_a_interno.get(tipo_b) if tipo_b else None
         if clase_a is None or clase_b is None:

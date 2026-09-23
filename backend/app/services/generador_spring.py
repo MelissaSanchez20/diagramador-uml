@@ -50,6 +50,16 @@ Limitaciones conocidas (ver también el mensaje que acompañó esta implementaci
   En cambio, el generador defaultea a String como siempre pero deja un
   comentario `// tipo UML "..." no reconocido, se usó String por defecto`
   arriba del campo, visible al revisar el .java antes de usarlo.
+
+El proyecto generado corre sin configuración manual, pensado para poder
+probarlo rápido: `application.properties` usa H2 en memoria por defecto
+(sin instalar/configurar PostgreSQL — el bloque de Postgres queda
+comentado como referencia para quien quiera persistencia real más
+adelante), se genera un `README.md` en la raíz con los pasos exactos
+para levantarlo, y se agrega `config/CorsConfig.java` con CORS abierto
+para que un frontend en cualquier puerto de localhost pueda consumir la
+API sin bloqueos del navegador. Ambas cosas son para pruebas/demo
+locales, no para producción (sigue sin haber autenticación/JWT).
 """
 
 from __future__ import annotations
@@ -163,6 +173,11 @@ def pluralizar(palabra: str) -> str:
     if palabra[-1].lower() in "aeiouáéíóú":
         return palabra + "s"
     return palabra + "es"
+
+
+def ruta_api_clase(nombre_java: str) -> str:
+    """Segmento de ruta REST bajo /api/ para una clase (ej. 'Persona' -> 'personas')."""
+    return pluralizar(nombre_java).lower()
 
 
 def slug_paquete(nombre_proyecto: str) -> str:
@@ -539,7 +554,7 @@ public class {nombre_java}Service {{
 
 def _renderizar_controller(nombre_java: str, paquete_base: str) -> str:
     var = nombre_campo_java(nombre_java)
-    ruta = pluralizar(nombre_java).lower()
+    ruta = ruta_api_clase(nombre_java)
     return f"""package {paquete_base}.controller;
 
 import {paquete_base}.model.{nombre_java};
@@ -627,6 +642,11 @@ def _renderizar_pom(slug: str) -> str:
             <scope>runtime</scope>
         </dependency>
         <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
@@ -650,14 +670,31 @@ def _renderizar_pom(slug: str) -> str:
 """
 
 
-def _renderizar_application_properties() -> str:
-    return """# Generado automáticamente (CU08) — completar antes de ejecutar.
-spring.datasource.url=jdbc:postgresql://localhost:5432/CAMBIAR_NOMBRE_BD
-spring.datasource.username=CAMBIAR_USUARIO
-spring.datasource.password=CAMBIAR_CONTRASENA
+def _renderizar_application_properties(slug: str) -> str:
+    return f"""# Generado automáticamente (CU08).
+# Por defecto usa una base de datos H2 en memoria: no hace falta instalar
+# ni configurar nada para levantar este backend y probarlo. Los datos NO
+# persisten entre reinicios de la aplicación — pensado para pruebas
+# manuales/demo rápidas, no para producción.
+spring.datasource.url=jdbc:h2:mem:{slug};DB_CLOSE_DELAY=-1
+spring.datasource.driver-class-name=org.h2.Driver
+spring.datasource.username=sa
+spring.datasource.password=
+
+# Consola web de H2 (para inspeccionar las tablas mientras se prueba):
+# http://localhost:8080/h2-console -- JDBC URL: jdbc:h2:mem:{slug}
+spring.h2.console.enabled=true
 
 spring.jpa.hibernate.ddl-auto=update
 spring.jpa.show-sql=true
+
+# --- Para usar PostgreSQL en vez de H2 (persistencia real entre reinicios) ---
+# 1. Comentar las líneas activas de arriba (spring.datasource.* y spring.h2.console.enabled).
+# 2. Descomentar y completar estas:
+# spring.datasource.url=jdbc:postgresql://localhost:5432/CAMBIAR_NOMBRE_BD
+# spring.datasource.driver-class-name=org.postgresql.Driver
+# spring.datasource.username=CAMBIAR_USUARIO
+# spring.datasource.password=CAMBIAR_CONTRASENA
 
 # Seguridad: este backend generado NO incluye autenticación/JWT todavía.
 # Es una mejora futura pendiente (ver limitaciones documentadas de CU08).
@@ -680,6 +717,97 @@ public class {nombre_clase_app} {{
 """
 
 
+def _renderizar_cors_config(paquete_base: str) -> str:
+    return f"""package {paquete_base}.config;
+
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+/**
+ * CORS abierto para pruebas/demo locales (CU08, generado automáticamente).
+ * Permite que un frontend en cualquier origen llame a esta API sin
+ * errores de CORS en el navegador. NO usar tal cual en producción: este
+ * backend generado tampoco incluye autenticación/JWT (ver README.md).
+ */
+@Configuration
+public class CorsConfig implements WebMvcConfigurer {{
+
+    @Override
+    public void addCorsMappings(CorsRegistry registry) {{
+        registry.addMapping("/api/**")
+                .allowedOriginPatterns("*")
+                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                .allowedHeaders("*");
+    }}
+}}
+"""
+
+
+def _renderizar_readme(nombre_proyecto: str, slug: str, clases: list[ClaseUml]) -> str:
+    nombres_java = sorted({nombre_clase_java(c.nombre) for c in clases}, key=str.lower)
+    filas_clases = "\n".join(f"- `{n}` -> `/api/{ruta_api_clase(n)}`" for n in nombres_java)
+
+    return f"""# {slug} (backend generado - CU08)
+
+Backend Spring Boot generado automáticamente a partir del diagrama de
+clases UML del proyecto **"{nombre_proyecto}"**.
+
+## Requisitos previos
+
+- **Java 17** (JDK)
+- **Maven** instalado en el sistema (este proyecto generado no incluye
+  wrapper `mvnw`/`mvnw.cmd`)
+
+## Cómo ejecutar
+
+Desde la raíz de este proyecto (donde está `pom.xml`):
+
+```
+mvn spring-boot:run
+```
+
+La API queda disponible en **http://localhost:8080**.
+
+No se necesita ninguna configuración adicional para levantarlo: por
+defecto usa una base de datos **H2 en memoria** (ver
+`src/main/resources/application.properties`). Los datos **no persisten**
+entre reinicios de la aplicación — pensado para pruebas manuales/demo
+rápidas, no para producción. Si más adelante se necesita persistencia
+real, `application.properties` incluye (comentado) el bloque de
+configuración para PostgreSQL.
+
+Consola web de H2 (para inspeccionar las tablas mientras se prueba):
+http://localhost:8080/h2-console — JDBC URL: `jdbc:h2:mem:{slug}`,
+usuario `sa`, contraseña en blanco.
+
+## Endpoints generados
+
+Cada clase del diagrama expone un CRUD REST estándar bajo `/api/{{plural}}`:
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| GET    | /api/{{plural}}      | Listar todos |
+| GET    | /api/{{plural}}/{{id}} | Obtener uno por id |
+| POST   | /api/{{plural}}      | Crear |
+| PUT    | /api/{{plural}}/{{id}} | Actualizar |
+| DELETE | /api/{{plural}}/{{id}} | Eliminar |
+
+Clases de este proyecto:
+
+{filas_clases}
+
+## Limitaciones conocidas
+
+- **Sin autenticación/JWT**: todos los endpoints son públicos. No usar
+  este backend tal cual en un entorno real.
+- **CORS abierto para desarrollo**: se permite cualquier origen sobre
+  `/api/**` (ver `config/CorsConfig.java`) para que un frontend en
+  cualquier puerto de localhost pueda probar contra esta API sin
+  configuración adicional. Tampoco apto para producción tal cual.
+"""
+
+
 # --------------------------------------------------------------------------
 # Punto de entrada: arma el .zip completo.
 # --------------------------------------------------------------------------
@@ -697,10 +825,15 @@ def generar_zip_backend(proyecto: Proyecto, clases: list[ClaseUml], relaciones: 
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         raiz = slug
         zf.writestr(f"{raiz}/pom.xml", _renderizar_pom(slug))
-        zf.writestr(f"{raiz}/src/main/resources/application.properties", _renderizar_application_properties())
+        zf.writestr(f"{raiz}/src/main/resources/application.properties", _renderizar_application_properties(slug))
+        zf.writestr(f"{raiz}/README.md", _renderizar_readme(proyecto.nombre, slug, clases))
         zf.writestr(
             f"{raiz}/src/main/java/{paquete_dir}/{nombre_app_class}.java",
             _renderizar_main(paquete_base, nombre_app_class),
+        )
+        zf.writestr(
+            f"{raiz}/src/main/java/{paquete_dir}/config/CorsConfig.java",
+            _renderizar_cors_config(paquete_base),
         )
 
         for c in clases:

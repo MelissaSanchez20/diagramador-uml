@@ -56,6 +56,11 @@ Limitaciones conocidas:
   "requerida" a partir de un diagrama que no declara nulabilidad) y evita
   que datos incompletos que ya estén en el backend rompan el parseo.
 
+El zip generado incluye la carpeta `android/` completa y lista para
+correr (`flutter pub get` + `flutter run`, sin pasar por `flutter create .`
+a mano) — ver la sección "Carpeta android/ generada" más abajo. **Es a
+propósito solo Android**: no se genera `ios/`/`web`/desktop.
+
 CU14 — modo offline (agrega capa de datos local a lo ya descrito arriba):
 - Almacenamiento local: `sqflite` (SQLite embebido) — no necesita
   codegen/build_runner (a diferencia de Hive/Isar/Drift), lo que sería
@@ -100,6 +105,41 @@ CU14 — modo offline (agrega capa de datos local a lo ya descrito arriba):
   otro usuario haya borrado en el servidor (sin tombstones/reconciliación
   completa). El registro reaparecería recién si alguien más lo modifica y
   el próximo refresh lo vuelve a traer con datos distintos.
+
+Carpeta android/ generada (pensada para poder probar la app sin más que
+`flutter pub get` + `flutter run`):
+- La mayor parte de la carpeta (Gradle, AGP, Kotlin, manifests, temas,
+  ícono) es texto/binario 100% genérico, idéntico en cualquier proyecto
+  Flutter recién creado — se vendorea tal cual, vino de un `flutter
+  create` real hecho en esta máquina (`mobile/android/`, el proyecto
+  Flutter de referencia que ya existía en este repo). Los únicos 3
+  archivos con un dato específico del proyecto (`android/app/build.gradle.kts`
+  namespace/applicationId, `MainActivity.kt` con su paquete/ruta de
+  carpetas, y `AndroidManifest.xml` con `android:label`) se arman
+  reemplazando un placeholder sobre una plantilla de texto (no con
+  f-strings: el contenido real es Kotlin/XML lleno de `{`/`}` propios del
+  lenguaje, que chocarían con la interpolación de Python).
+- Lo único verdaderamente binario (`gradle-wrapper.jar`, ~53 KB, y los 5
+  íconos `ic_launcher.png` por densidad — el ícono azul de Flutter por
+  defecto, sin branding propio) no se puede generar como texto: se
+  vendorea como archivos reales en `backend/app/services/plantillas_android/`
+  y se leen con `Path.read_bytes()` al armar el zip.
+- **No se bundlea `android/local.properties`** (tiene rutas absolutas de
+  la máquina donde se generó, `sdk.dir`/`flutter.sdk`) — Flutter lo
+  regenera solo, apuntando al Android SDK de quien lo use, la primera vez
+  que corre `flutter run`/`flutter build`. Tampoco se bundlea `.gradle/`
+  (caché) ni `GeneratedPluginRegistrant.java` (lo recrea el propio plugin
+  de Gradle de Flutter en cada build) — ninguno de los dos existe en un
+  `flutter create` recién hecho tampoco, tal como confirma el `.gitignore`
+  vendoreado en `android/.gitignore`.
+- Limitación conocida: Gradle 8.14 / AGP 8.11.1 / Kotlin 2.2.20 / JDK 17
+  quedan **fijos** a lo que tenía instalado esta máquina al vendorear la
+  plantilla — no se invoca `flutter create` en el servidor (cambio de
+  infraestructura mucho mayor), así que si más adelante se actualiza el
+  Flutter SDK local a algo bastante más nuevo, el scaffold generado podría
+  no ser exactamente el que produciría un `flutter create .` fresco en
+  ese momento. No debería impedir que compile/corra, solo podría no ser
+  la combinación "más nueva posible".
 """
 
 from __future__ import annotations
@@ -107,6 +147,8 @@ from __future__ import annotations
 import io
 import zipfile
 from dataclasses import dataclass, field
+from pathlib import Path
+from xml.sax.saxutils import escape as _escapar_xml
 
 from app.models.clase_uml import ClaseUml
 from app.models.proyecto import Proyecto
@@ -1473,6 +1515,683 @@ class HomeScreen extends StatelessWidget {{
 """
 
 
+# --------------------------------------------------------------------------
+# Carpeta android/ — plantillas de texto vendoreadas desde un `flutter
+# create` real (mobile/android/, ver encabezado del módulo). Son strings
+# planos (NO f-strings): el contenido es Kotlin/XML/shell lleno de sus
+# propios `{`/`}`/`$`, así que la interpolación de los 3 valores
+# específicos del proyecto se hace con `.replace()` sobre un placeholder,
+# no con f-strings.
+# --------------------------------------------------------------------------
+
+_DIR_PLANTILLAS_ANDROID = Path(__file__).parent / "plantillas_android"
+
+_DENSIDADES_ICONO = ("mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi")
+
+
+def _leer_asset_android(nombre_relativo: str) -> bytes:
+    return (_DIR_PLANTILLAS_ANDROID / nombre_relativo).read_bytes()
+
+
+_ANDROID_SETTINGS_GRADLE = """pluginManagement {
+    val flutterSdkPath =
+        run {
+            val properties = java.util.Properties()
+            file("local.properties").inputStream().use { properties.load(it) }
+            val flutterSdkPath = properties.getProperty("flutter.sdk")
+            require(flutterSdkPath != null) { "flutter.sdk not set in local.properties" }
+            flutterSdkPath
+        }
+
+    includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
+
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id("dev.flutter.flutter-plugin-loader") version "1.0.0"
+    id("com.android.application") version "8.11.1" apply false
+    id("org.jetbrains.kotlin.android") version "2.2.20" apply false
+}
+
+include(":app")
+"""
+
+_ANDROID_BUILD_GRADLE_RAIZ = """allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+val newBuildDir: Directory =
+    rootProject.layout.buildDirectory
+        .dir("../../build")
+        .get()
+rootProject.layout.buildDirectory.value(newBuildDir)
+
+subprojects {
+    val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
+    project.layout.buildDirectory.value(newSubprojectBuildDir)
+}
+subprojects {
+    project.evaluationDependsOn(":app")
+}
+
+tasks.register<Delete>("clean") {
+    delete(rootProject.layout.buildDirectory)
+}
+"""
+
+_ANDROID_GRADLE_PROPERTIES = """org.gradle.jvmargs=-Xmx8G -XX:MaxMetaspaceSize=4G -XX:ReservedCodeCacheSize=512m -XX:+HeapDumpOnOutOfMemoryError
+android.useAndroidX=true
+"""
+
+# Gradle 8.14 -- si se actualiza acá, actualizar también el .jar vendoreado
+# en plantillas_android/gradle-wrapper.jar (tiene que ser la misma versión).
+_ANDROID_GRADLE_WRAPPER_PROPERTIES = """distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14-all.zip
+"""
+
+_ANDROID_BUILD_GRADLE_APP = """plugins {
+    id("com.android.application")
+    id("kotlin-android")
+    // El plugin de Gradle de Flutter tiene que aplicarse después de los de Android y Kotlin.
+    id("dev.flutter.flutter-gradle-plugin")
+}
+
+android {
+    namespace = "__PAQUETE__"
+    compileSdk = flutter.compileSdkVersion
+    ndkVersion = flutter.ndkVersion
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_17.toString()
+    }
+
+    defaultConfig {
+        applicationId = "__PAQUETE__"
+        minSdk = flutter.minSdkVersion
+        targetSdk = flutter.targetSdkVersion
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+    }
+
+    buildTypes {
+        release {
+            // Firmado con las claves de debug por ahora, para que `flutter run --release` funcione.
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+}
+
+flutter {
+    source = "../.."
+}
+"""
+
+_ANDROID_MAIN_ACTIVITY = """package __PAQUETE__
+
+import io.flutter.embedding.android.FlutterActivity
+
+class MainActivity : FlutterActivity()
+"""
+
+_ANDROID_MANIFEST_PRINCIPAL = """<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:label="__NOMBRE_APP__"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
+</manifest>
+"""
+
+# Idéntico en debug y profile -- el único permiso que Flutter necesita en
+# builds no-release para hot reload/depuración.
+_ANDROID_MANIFEST_DEBUG_PROFILE = """<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The INTERNET permission is required for development. Specifically,
+         the Flutter tool needs it to communicate with the running application
+         to allow setting breakpoints, to provide hot reload, etc.
+    -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+</manifest>
+"""
+
+_ANDROID_STYLES_XML = """<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Theme applied to the Android Window while the process is starting when the OS's Dark Mode setting is off -->
+    <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <!-- Show a splash screen on the activity. Automatically removed when
+             the Flutter engine draws its first frame -->
+        <item name="android:windowBackground">@drawable/launch_background</item>
+    </style>
+    <!-- Theme applied to the Android Window as soon as the process has started.
+         This theme determines the color of the Android Window while your
+         Flutter UI initializes, as well as behind your Flutter UI while its
+         running.
+
+         This Theme is only used starting with V2 of Flutter's Android embedding. -->
+    <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <item name="android:windowBackground">?android:colorBackground</item>
+    </style>
+</resources>
+"""
+
+_ANDROID_STYLES_NIGHT_XML = """<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Theme applied to the Android Window while the process is starting when the OS's Dark Mode setting is on -->
+    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <!-- Show a splash screen on the activity. Automatically removed when
+             the Flutter engine draws its first frame -->
+        <item name="android:windowBackground">@drawable/launch_background</item>
+    </style>
+    <!-- Theme applied to the Android Window as soon as the process has started.
+         This theme determines the color of the Android Window while your
+         Flutter UI initializes, as well as behind your Flutter UI while its
+         running.
+
+         This Theme is only used starting with V2 of Flutter's Android embedding. -->
+    <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">?android:colorBackground</item>
+    </style>
+</resources>
+"""
+
+_ANDROID_LAUNCH_BACKGROUND_XML = """<?xml version="1.0" encoding="utf-8"?>
+<!-- Modify this file to customize your launch splash screen -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@android:color/white" />
+
+    <!-- You can insert your own image assets here -->
+    <!-- <item>
+        <bitmap
+            android:gravity="center"
+            android:src="@mipmap/launch_image" />
+    </item> -->
+</layer-list>
+"""
+
+_ANDROID_LAUNCH_BACKGROUND_V21_XML = """<?xml version="1.0" encoding="utf-8"?>
+<!-- Modify this file to customize your launch splash screen -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="?android:colorBackground" />
+
+    <!-- You can insert your own image assets here -->
+    <!-- <item>
+        <bitmap
+            android:gravity="center"
+            android:src="@mipmap/launch_image" />
+    </item> -->
+</layer-list>
+"""
+
+_ANDROID_GITIGNORE = """gradle-wrapper.jar
+/.gradle
+/captures/
+/gradlew
+/gradlew.bat
+/local.properties
+GeneratedPluginRegistrant.java
+.cxx/
+
+# Remember to never publicly share your keystore.
+# See https://flutter.dev/to/reference-keystore
+key.properties
+**/*.keystore
+**/*.jks
+"""
+
+# Scripts genéricos del Gradle Wrapper (no tienen nada específico del
+# proyecto) -- copiados tal cual de mobile/android/gradlew(.bat), que no
+# están en git ahí (excluidos por mobile/android/.gitignore) pero sí
+# existen en el disco de la máquina donde se armó esta plantilla.
+_ANDROID_GRADLEW = """#!/usr/bin/env bash
+
+##############################################################################
+##
+##  Gradle start up script for UN*X
+##
+##############################################################################
+
+# Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
+DEFAULT_JVM_OPTS=""
+
+APP_NAME="Gradle"
+APP_BASE_NAME=`basename "$0"`
+
+# Use the maximum available, or set MAX_FD != -1 to use that value.
+MAX_FD="maximum"
+
+warn ( ) {
+    echo "$*"
+}
+
+die ( ) {
+    echo
+    echo "$*"
+    echo
+    exit 1
+}
+
+# OS specific support (must be 'true' or 'false').
+cygwin=false
+msys=false
+darwin=false
+case "`uname`" in
+  CYGWIN* )
+    cygwin=true
+    ;;
+  Darwin* )
+    darwin=true
+    ;;
+  MINGW* )
+    msys=true
+    ;;
+esac
+
+# Attempt to set APP_HOME
+# Resolve links: $0 may be a link
+PRG="$0"
+# Need this for relative symlinks.
+while [ -h "$PRG" ] ; do
+    ls=`ls -ld "$PRG"`
+    link=`expr "$ls" : '.*-> \\(.*\\)$'`
+    if expr "$link" : '/.*' > /dev/null; then
+        PRG="$link"
+    else
+        PRG=`dirname "$PRG"`"/$link"
+    fi
+done
+SAVED="`pwd`"
+cd "`dirname \\"$PRG\\"`/" >/dev/null
+APP_HOME="`pwd -P`"
+cd "$SAVED" >/dev/null
+
+CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
+
+# Determine the Java command to use to start the JVM.
+if [ -n "$JAVA_HOME" ] ; then
+    if [ -x "$JAVA_HOME/jre/sh/java" ] ; then
+        # IBM's JDK on AIX uses strange locations for the executables
+        JAVACMD="$JAVA_HOME/jre/sh/java"
+    else
+        JAVACMD="$JAVA_HOME/bin/java"
+    fi
+    if [ ! -x "$JAVACMD" ] ; then
+        die "ERROR: JAVA_HOME is set to an invalid directory: $JAVA_HOME
+
+Please set the JAVA_HOME variable in your environment to match the
+location of your Java installation."
+    fi
+else
+    JAVACMD="java"
+    which java >/dev/null 2>&1 || die "ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.
+
+Please set the JAVA_HOME variable in your environment to match the
+location of your Java installation."
+fi
+
+# Increase the maximum file descriptors if we can.
+if [ "$cygwin" = "false" -a "$darwin" = "false" ] ; then
+    MAX_FD_LIMIT=`ulimit -H -n`
+    if [ $? -eq 0 ] ; then
+        if [ "$MAX_FD" = "maximum" -o "$MAX_FD" = "max" ] ; then
+            MAX_FD="$MAX_FD_LIMIT"
+        fi
+        ulimit -n $MAX_FD
+        if [ $? -ne 0 ] ; then
+            warn "Could not set maximum file descriptor limit: $MAX_FD"
+        fi
+    else
+        warn "Could not query maximum file descriptor limit: $MAX_FD_LIMIT"
+    fi
+fi
+
+# For Darwin, add options to specify how the application appears in the dock
+if $darwin; then
+    GRADLE_OPTS="$GRADLE_OPTS \\"-Xdock:name=$APP_NAME\\" \\"-Xdock:icon=$APP_HOME/media/gradle.icns\\""
+fi
+
+# For Cygwin, switch paths to Windows format before running java
+if $cygwin ; then
+    APP_HOME=`cygpath --path --mixed "$APP_HOME"`
+    CLASSPATH=`cygpath --path --mixed "$CLASSPATH"`
+    JAVACMD=`cygpath --unix "$JAVACMD"`
+
+    # We build the pattern for arguments to be converted via cygpath
+    ROOTDIRSRAW=`find -L / -maxdepth 1 -mindepth 1 -type d 2>/dev/null`
+    SEP=""
+    for dir in $ROOTDIRSRAW ; do
+        ROOTDIRS="$ROOTDIRS$SEP$dir"
+        SEP="|"
+    done
+    OURCYGPATTERN="(^($ROOTDIRS))"
+    # Add a user-defined pattern to the cygpath arguments
+    if [ "$GRADLE_CYGPATTERN" != "" ] ; then
+        OURCYGPATTERN="$OURCYGPATTERN|($GRADLE_CYGPATTERN)"
+    fi
+    # Now convert the arguments - kludge to limit ourselves to /bin/sh
+    i=0
+    for arg in "$@" ; do
+        CHECK=`echo "$arg"|egrep -c "$OURCYGPATTERN" -`
+        CHECK2=`echo "$arg"|egrep -c "^-"`                                 ### Determine if an option
+
+        if [ $CHECK -ne 0 ] && [ $CHECK2 -eq 0 ] ; then                    ### Added a condition
+            eval `echo args$i`=`cygpath --path --ignore --mixed "$arg"`
+        else
+            eval `echo args$i`="\\"$arg\\""
+        fi
+        i=$((i+1))
+    done
+    case $i in
+        (0) set -- ;;
+        (1) set -- "$args0" ;;
+        (2) set -- "$args0" "$args1" ;;
+        (3) set -- "$args0" "$args1" "$args2" ;;
+        (4) set -- "$args0" "$args1" "$args2" "$args3" ;;
+        (5) set -- "$args0" "$args1" "$args2" "$args3" "$args4" ;;
+        (6) set -- "$args0" "$args1" "$args2" "$args3" "$args4" "$args5" ;;
+        (7) set -- "$args0" "$args1" "$args2" "$args3" "$args4" "$args5" "$args6" ;;
+        (8) set -- "$args0" "$args1" "$args2" "$args3" "$args4" "$args5" "$args6" "$args7" ;;
+        (9) set -- "$args0" "$args1" "$args2" "$args3" "$args4" "$args5" "$args6" "$args7" "$args8" ;;
+    esac
+fi
+
+# Split up the JVM_OPTS And GRADLE_OPTS values into an array, following the shell quoting and substitution rules
+function splitJvmOpts() {
+    JVM_OPTS=("$@")
+}
+eval splitJvmOpts $DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS
+JVM_OPTS[${#JVM_OPTS[*]}]="-Dorg.gradle.appname=$APP_BASE_NAME"
+
+exec "$JAVACMD" "${JVM_OPTS[@]}" -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"
+"""
+
+_ANDROID_GRADLEW_BAT = """@if "%DEBUG%" == "" @echo off
+@rem ##########################################################################
+@rem
+@rem  Gradle startup script for Windows
+@rem
+@rem ##########################################################################
+
+@rem Set local scope for the variables with windows NT shell
+if "%OS%"=="Windows_NT" setlocal
+
+@rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
+set DEFAULT_JVM_OPTS=
+
+set DIRNAME=%~dp0
+if "%DIRNAME%" == "" set DIRNAME=.
+set APP_BASE_NAME=%~n0
+set APP_HOME=%DIRNAME%
+
+@rem Find java.exe
+if defined JAVA_HOME goto findJavaFromJavaHome
+
+set JAVA_EXE=java.exe
+%JAVA_EXE% -version >NUL 2>&1
+if "%ERRORLEVEL%" == "0" goto init
+
+echo.
+echo ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.
+echo.
+echo Please set the JAVA_HOME variable in your environment to match the
+echo location of your Java installation.
+
+goto fail
+
+:findJavaFromJavaHome
+set JAVA_HOME=%JAVA_HOME:"=%
+set JAVA_EXE=%JAVA_HOME%/bin/java.exe
+
+if exist "%JAVA_EXE%" goto init
+
+echo.
+echo ERROR: JAVA_HOME is set to an invalid directory: %JAVA_HOME%
+echo.
+echo Please set the JAVA_HOME variable in your environment to match the
+echo location of your Java installation.
+
+goto fail
+
+:init
+@rem Get command-line arguments, handling Windowz variants
+
+if not "%OS%" == "Windows_NT" goto win9xME_args
+if "%@eval[2+2]" == "4" goto 4NT_args
+
+:win9xME_args
+@rem Slurp the command line arguments.
+set CMD_LINE_ARGS=
+set _SKIP=2
+
+:win9xME_args_slurp
+if "x%~1" == "x" goto execute
+
+set CMD_LINE_ARGS=%*
+goto execute
+
+:4NT_args
+@rem Get arguments from the 4NT Shell from JP Software
+set CMD_LINE_ARGS=%$
+
+:execute
+@rem Setup the command line
+
+set CLASSPATH=%APP_HOME%\\gradle\\wrapper\\gradle-wrapper.jar
+
+@rem Execute Gradle
+"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" org.gradle.wrapper.GradleWrapperMain %CMD_LINE_ARGS%
+
+:end
+@rem End local scope for the variables with windows NT shell
+if "%ERRORLEVEL%"=="0" goto mainEnd
+
+:fail
+rem Set variable GRADLE_EXIT_CONSOLE if you need the _script_ return code instead of
+rem the _cmd.exe /c_ return code!
+if  not "" == "%GRADLE_EXIT_CONSOLE%" exit 1
+exit /b 1
+
+:mainEnd
+if "%OS%"=="Windows_NT" endlocal
+
+:omega
+"""
+
+# .gitignore de raíz del proyecto Flutter generado -- recorte del que
+# produce `flutter create` (sin las secciones de plataformas que acá no se
+# generan: ios/, web/, linux/, macos/, windows/, coverage/).
+_RAIZ_GITIGNORE = """# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+
+# Android related
+android/.gradle/
+android/local.properties
+android/**/GeneratedPluginRegistrant.java
+"""
+
+
+def _renderizar_android_build_gradle(paquete: str) -> str:
+    return _ANDROID_BUILD_GRADLE_APP.replace("__PAQUETE__", paquete)
+
+
+def _renderizar_main_activity(paquete: str) -> str:
+    return _ANDROID_MAIN_ACTIVITY.replace("__PAQUETE__", paquete)
+
+
+def _renderizar_android_manifest(nombre_app: str) -> str:
+    # android:label es un atributo XML -- escapar &/</>/" para que un
+    # nombre de proyecto con esos caracteres no rompa el manifest.
+    return _ANDROID_MANIFEST_PRINCIPAL.replace(
+        "__NOMBRE_APP__", _escapar_xml(nombre_app, {'"': "&quot;"})
+    )
+
+
+def _agregar_carpeta_android(zf: zipfile.ZipFile, raiz: str, paquete: str, nombre_app: str) -> None:
+    base = f"{raiz}/android"
+    paquete_dir = paquete.replace(".", "/")
+
+    zf.writestr(f"{base}/.gitignore", _ANDROID_GITIGNORE)
+    zf.writestr(f"{base}/settings.gradle.kts", _ANDROID_SETTINGS_GRADLE)
+    zf.writestr(f"{base}/build.gradle.kts", _ANDROID_BUILD_GRADLE_RAIZ)
+    zf.writestr(f"{base}/gradle.properties", _ANDROID_GRADLE_PROPERTIES)
+    zf.writestr(f"{base}/gradle/wrapper/gradle-wrapper.properties", _ANDROID_GRADLE_WRAPPER_PROPERTIES)
+    zf.writestr(f"{base}/app/build.gradle.kts", _renderizar_android_build_gradle(paquete))
+    zf.writestr(
+        f"{base}/app/src/main/kotlin/{paquete_dir}/MainActivity.kt",
+        _renderizar_main_activity(paquete),
+    )
+    zf.writestr(f"{base}/app/src/main/AndroidManifest.xml", _renderizar_android_manifest(nombre_app))
+    zf.writestr(f"{base}/app/src/debug/AndroidManifest.xml", _ANDROID_MANIFEST_DEBUG_PROFILE)
+    zf.writestr(f"{base}/app/src/profile/AndroidManifest.xml", _ANDROID_MANIFEST_DEBUG_PROFILE)
+    zf.writestr(f"{base}/app/src/main/res/values/styles.xml", _ANDROID_STYLES_XML)
+    zf.writestr(f"{base}/app/src/main/res/values-night/styles.xml", _ANDROID_STYLES_NIGHT_XML)
+    zf.writestr(f"{base}/app/src/main/res/drawable/launch_background.xml", _ANDROID_LAUNCH_BACKGROUND_XML)
+    zf.writestr(
+        f"{base}/app/src/main/res/drawable-v21/launch_background.xml", _ANDROID_LAUNCH_BACKGROUND_V21_XML
+    )
+    for densidad in _DENSIDADES_ICONO:
+        zf.writestr(
+            f"{base}/app/src/main/res/mipmap-{densidad}/ic_launcher.png",
+            _leer_asset_android(f"mipmap-{densidad}/ic_launcher.png"),
+        )
+    zf.writestr(f"{base}/gradle/wrapper/gradle-wrapper.jar", _leer_asset_android("gradle-wrapper.jar"))
+
+    # gradlew es un script Unix -- el bit ejecutable no importa en Windows,
+    # pero así el zip queda correcto también si se prueba en Mac/Linux.
+    info_gradlew = zipfile.ZipInfo(f"{base}/gradlew")
+    info_gradlew.external_attr = 0o755 << 16
+    zf.writestr(info_gradlew, _ANDROID_GRADLEW)
+    zf.writestr(f"{base}/gradlew.bat", _ANDROID_GRADLEW_BAT)
+
+
+def _renderizar_readme(nombre_proyecto: str, slug: str, paquete: str, clases_datos: list[DatosClase]) -> str:
+    filas_clases = "\n".join(f"- `{d.nombre_dart}` -> `/api/{d.ruta_api}`" for d in clases_datos)
+
+    return f"""# {slug} (frontend Flutter generado - CU15)
+
+App Flutter generada automáticamente a partir del diagrama de clases UML
+del proyecto **"{nombre_proyecto}"**. Pensada para consumir el backend
+Spring Boot generado por CU08 (mismas rutas `/api/{{plural}}`).
+
+## Requisitos previos
+
+- **Flutter SDK** instalado (cualquier versión estable reciente).
+- **Android SDK** configurado (Android Studio, o las cmdline-tools solas)
+  con al menos un emulador creado o un dispositivo Android conectado por
+  USB con depuración habilitada.
+- **JDK 17** — si ya corriste el backend generado por CU08 en esta misma
+  máquina, ya lo tenés instalado.
+
+Este proyecto **incluye solo la plataforma Android** (no iOS/web/desktop).
+
+## Antes de correrla: el backend tiene que estar corriendo
+
+Esta app le pega a la URL configurada en `lib/config.dart` al generarla.
+Generá y corré el backend de CU08 primero (trae su propio `README.md` con
+los pasos) — si necesitás cambiar la URL después, es la única línea para
+editar a mano en `lib/config.dart`.
+
+## Cómo ejecutar
+
+Desde la raíz de este proyecto (donde está `pubspec.yaml`):
+
+```
+flutter pub get
+flutter run
+```
+
+Elegí un emulador Android o un dispositivo conectado cuando `flutter run`
+lo pida. **No hace falta correr `flutter create .`** ni nada más — la
+carpeta `android/` ya viene lista (Gradle 8.14, AGP 8.11.1, Kotlin 2.2.20,
+paquete `{paquete}`).
+
+## Qué trae y qué no
+
+- CRUD completo (crear, editar, listar, eliminar) por cada clase, contra
+  el backend generado. Arranca **sin datos de ejemplo** — las tablas
+  están vacías hasta que cargues algo desde la app.
+- **Modo offline** (CU14): guarda los cambios localmente (SQLite) y
+  sincroniza solo cuando hay conexión — revisá la pantalla
+  "Sincronización" si algo falla al sincronizar.
+- Sin autenticación/JWT — igual que el backend generado.
+- Solo Android: no se genera `ios/`, `web/` ni desktop.
+
+Clases de este proyecto:
+
+{filas_clases}
+"""
+
+
 def _renderizar_pubspec(slug: str) -> str:
     return f"""name: {slug}
 description: Frontend Flutter generado automáticamente a partir del diagrama de clases (CU15).
@@ -1546,7 +2265,11 @@ def generar_zip_frontend(
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         raiz = slug
+        paquete = f"com.generado.{slug}"
         zf.writestr(f"{raiz}/pubspec.yaml", _renderizar_pubspec(slug))
+        zf.writestr(f"{raiz}/README.md", _renderizar_readme(proyecto.nombre, slug, paquete, clases_datos))
+        zf.writestr(f"{raiz}/.gitignore", _RAIZ_GITIGNORE)
+        _agregar_carpeta_android(zf, raiz, paquete, proyecto.nombre)
         zf.writestr(f"{raiz}/lib/config.dart", _renderizar_config(url_base))
         zf.writestr(f"{raiz}/lib/main.dart", _renderizar_main(proyecto.nombre, clases_datos))
         zf.writestr(f"{raiz}/lib/offline/db.dart", _renderizar_offline_db(slug, clases_datos))

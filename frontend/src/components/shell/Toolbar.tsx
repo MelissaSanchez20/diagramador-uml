@@ -321,17 +321,33 @@ export function Toolbar({
         const bounds = getNodesBounds(getNodes())
         const viewport = getViewportForBounds(bounds, ancho, alto, 0.1, 2, 0.1)
 
-        const dataUrl = await toPng(viewportEl, {
-          backgroundColor: '#ffffff',
-          width: ancho,
-          height: alto,
-          style: {
-            width: `${ancho}px`,
-            height: `${alto}px`,
-            transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
-          },
-        })
-        descargarDataUrl(dataUrl, `${slugNombreArchivo(project.nombre)}-reporte.png`)
+        // <UmlMarkers /> (los <marker> de triángulo/rombo) se monta como
+        // hermano de <ReactFlow>, fuera de .react-flow__viewport -- html-to-
+        // image solo clona lo que le pasamos, así que sin esto los
+        // `url(#uml-generalization)` etc. de cada arista apuntan a nada y
+        // ni siquiera se ve la línea (el navegador no dibuja un <path> cuyo
+        // marker referenciado no existe en el documento clonado). Se
+        // inserta una copia temporal DENTRO del nodo capturado y se saca
+        // apenas termina, para no alterar el lienzo en vivo.
+        const marcadoresEl = document.querySelector('.uml-markers')
+        const marcadoresClon = marcadoresEl?.cloneNode(true) as SVGElement | undefined
+        if (marcadoresClon) viewportEl.appendChild(marcadoresClon)
+
+        try {
+          const dataUrl = await toPng(viewportEl, {
+            backgroundColor: '#ffffff',
+            width: ancho,
+            height: alto,
+            style: {
+              width: `${ancho}px`,
+              height: `${alto}px`,
+              transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
+            },
+          })
+          descargarDataUrl(dataUrl, `${slugNombreArchivo(project.nombre)}-reporte.png`)
+        } finally {
+          marcadoresClon?.remove()
+        }
       }
     } catch (err) {
       setErrorReporte(getApiErrorMessage(err, 'No se pudo exportar el reporte'))

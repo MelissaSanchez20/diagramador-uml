@@ -1,4 +1,4 @@
-import type { AtributoUml, MetodoUml, TipoRelacion, Visibilidad } from '../../api/types'
+import type { AtributoUml, FormaRelacion, MetodoUml, TipoRelacion, Visibilidad } from '../../api/types'
 
 /** Símbolo UML estándar por nivel de visibilidad. */
 export function simboloVisibilidad(v: Visibilidad): string {
@@ -87,6 +87,12 @@ export const OPCIONES_MULTIPLICIDAD: { value: string; label: string }[] = [
   { value: '1..*', label: '1..*' },
 ]
 
+export const OPCIONES_FORMA_RELACION: { value: FormaRelacion; label: string }[] = [
+  { value: 'RECTA', label: 'Recta' },
+  { value: 'L', label: 'En L (ángulos rectos)' },
+  { value: 'CURVA', label: 'Curva' },
+]
+
 export const OPCIONES_TIPO_RELACION: { value: TipoRelacion; label: string }[] = [
   { value: 'ASOCIACION', label: 'Asociación' },
   { value: 'HERENCIA', label: 'Herencia' },
@@ -112,7 +118,9 @@ export function markerDeRelacion(tipo: TipoRelacion): { markerStart?: string; ma
     case 'HERENCIA':
       return { markerStart: undefined, markerEnd: 'uml-generalization' }
     case 'ASOCIACION':
-      return { markerStart: undefined, markerEnd: 'uml-association' }
+      // Línea simple entre clases, sin punta de flecha (no es una relación
+      // dirigida) -- ver UmlMarkers.tsx, no existe un marker 'uml-association'.
+      return { markerStart: undefined, markerEnd: undefined }
     case 'AGREGACION':
       return { markerStart: 'uml-aggregation', markerEnd: undefined }
     case 'COMPOSICION':

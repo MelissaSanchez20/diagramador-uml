@@ -132,3 +132,20 @@ def test_importar_xmi_colaborador_activo_puede_importar(
 
     resp = _subir(client, proyecto_destino.id, xmi_bytes, headers(colaborador))
     assert resp.status_code == 200
+
+
+def test_importar_xmi_real_de_enterprise_architect(client, crear_usuario, crear_proyecto, headers):
+    """Archivo real exportado por Enterprise Architect: antes daba 409 por
+    "nombres de clase duplicados" (EA repite cada clase en su xmi:Extension)."""
+    from pathlib import Path
+
+    admin = crear_usuario()
+    proyecto = crear_proyecto(admin, nombre="Desde EA")
+    contenido = (Path(__file__).parent / "fixtures" / "ea_pedidos.xmi").read_bytes()
+
+    resp = _subir(client, proyecto.id, contenido, headers(admin), nombre_archivo="prueba.xml")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["advertencias"] == []
+    assert sorted(c["nombre"] for c in body["diagrama"]["clases"]) == ["Cliente", "ItemPedido", "Pedido", "Producto"]
+    assert sorted(r["tipo"] for r in body["diagrama"]["relaciones"]) == ["ASOCIACION", "ASOCIACION", "COMPOSICION"]

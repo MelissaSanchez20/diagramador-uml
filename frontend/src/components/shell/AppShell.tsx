@@ -4,6 +4,7 @@ import type { Connection, Edge } from 'reactflow'
 
 import type { Proyecto } from '../../api/types'
 import { AgentePanel } from './AgentePanel'
+import { AccionesRelacionContext } from './accionesRelacion'
 import { CanvasArea } from './CanvasArea'
 import { RelacionEditorModal } from './RelacionEditorModal'
 import { Sidebar } from './Sidebar'
@@ -24,6 +25,7 @@ const RELACION_DEFAULT = {
   etiqueta: null,
   multiplicidad_origen: null,
   multiplicidad_destino: null,
+  forma: null,
 }
 
 export function AppShell({ project }: { project: Proyecto }) {
@@ -75,6 +77,7 @@ export function AppShell({ project }: { project: Proyecto }) {
           abierto={sidebarAbierto}
           onToggle={() => setSidebarAbierto((v) => !v)}
         />
+        <AccionesRelacionContext.Provider value={diagrama.moverPuntoRelacion}>
         <CanvasArea
           nodes={diagrama.nodes}
           edges={diagrama.edges}
@@ -90,6 +93,7 @@ export function AppShell({ project }: { project: Proyecto }) {
           onDeshacer={diagrama.deshacer}
           onRehacer={diagrama.rehacer}
         />
+        </AccionesRelacionContext.Provider>
         {agente.abierto && (
           <AgentePanel mensajes={agente.mensajes} enviando={agente.enviando} onEnviar={agente.enviarMensaje} />
         )}
@@ -109,7 +113,7 @@ export function AppShell({ project }: { project: Proyecto }) {
           titulo="Editar relación"
           valorInicial={modal.edge.data ?? RELACION_DEFAULT}
           onClose={cerrarModal}
-          onGuardar={(detalles) => diagrama.actualizarRelacion(modal.edge.id, detalles)}
+          onGuardar={(detalles, invertir) => diagrama.actualizarRelacion(modal.edge.id, detalles, invertir)}
           onEliminar={() => diagrama.eliminarRelacion(modal.edge.id)}
         />
       )}
