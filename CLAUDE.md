@@ -143,6 +143,34 @@ Casos de uso, todos con **autenticación JWT**:
 - **CU08** — Generación de backend Spring Boot — *backend + frontend hechos*. Botón "Generar backend" en la toolbar del editor descarga el `.zip` (ver la sección de arriba para el detalle y las limitaciones conocidas).
 - **CU07** — Gestión de reportes (PDF/Imagen/XMI) — *backend + frontend hechos*. Ver la sección "Reportes (CU07)" arriba.
 
+### Comandos de voz (CU11) — lenguaje natural
+
+- **Un comando puede crear varias clases y relacionarlas**, con tipo y multiplicidad deducidos por el dominio. La voz usa `construir_tools_voz()`: la tool compuesta `modificar_diagrama` (clases nuevas + atributos a clases existentes + relaciones) más `eliminar_clase`/`renombrar_clase`. Usa `tool_choice="required"`, porque con `"auto"` gpt-4o a veces contestaba texto a un pedido válido; si no entiende, devuelve listas vacías → 422. **CU13 no cambió**: sigue con las 5 tools de `construir_tools()`/`resolver_accion()`.
+- El prompt (`_prompt_sistema` en `comandos_voz.py`) trae el diagrama completo (`resumen_diagrama`, compartido con `agente.py`) y la guía UML:
+  - "es un" → HERENCIA (origen = subclase).
+  - Parte que muere con el todo → COMPOSICION; todo que agrupa partes independientes → AGREGACION (origen = todo, misma convención que CU12). Ante la duda, ASOCIACION.
+  - Multiplicidades leídas en los dos sentidos.
+  - Tipos de atributo deducidos del nombre.
+  - **Relacionar sola** (decisión de la usuaria): una clase nueva se conecta con las del diagrama cuando el vínculo es evidente, aunque no lo diga.
+  - En el schema, cada multiplicidad va inmediatamente después del nombre de su clase (lección de CU12).
+- Modelo: `OPENAI_VOZ_MODEL` (default `gpt-4o`); gpt-4o-mini deducía peor las relaciones. CU13 sigue con `OPENAI_MODEL`.
+- `_manejar_modificar_diagrama` (función pura, tests en `test_comandos_voz.py::TestModificarDiagrama`) es tolerante: no falla todo el comando, descarta o ajusta con `advertencias`.
+  - Matching de nombres con `normalizar_nombre` y sin espacios ("detalle pedido" = DetallePedido). Los nombres nuevos se pasan a PascalCase.
+  - Una clase "nueva" que ya existe recibe sus atributos, sin 422. Los atributos repetidos se omiten.
+  - Se descartan las relaciones a clases desconocidas, consigo misma, ya existentes (mismo par sin importar el orden + mismo tipo) o repetidas.
+  - Herencia sin multiplicidad; una multiplicidad inválida queda `None`.
+  - Los extremos de relación a clases nuevas del mismo comando vienen con `id_clase=None` y el frontend los resuelve por nombre (los ids siguen generándose en el cliente).
+- Frontend: `aplicarAccionVoz.ts::aplicarModificacion` → `useDiagrama.ts::agregarLote`: un solo `setNodes`/`setEdges`/`guardarAhora`, así es un paso de Ctrl+Z y un push a Yjs. Los lados de las aristas se calculan por posición (`construirArista`). Las advertencias se muestran en la confirmación; en voz alta solo se lee el resumen. El texto admite hasta 2000 caracteres.
+- Medido contra la API real con gpt-4o (12 frases × 2 corridas, 6 de ellas distintas a los ejemplos del prompt):
+  - Tipos de relación correctos en todas.
+  - Relaciona sola Categoria↔Producto, Prestamo↔Socio/Libro y Docente↔Curso.
+  - "cuatro ruedas" → `1..*`.
+  - Lo discutible: Prestamo–Libro a veces sale como "un préstamo con varios libros".
+
+### Comandos de voz (CU11) — escucha
+
+- `useComandoVoz.ts`: el micrófono **no se corta con los silencios** — `SpeechRecognition` en modo `continuous` + `interimResults`, y si el navegador termina la sesión por su cuenta (silencio largo, red) se reinicia sola sobre una instancia nueva conservando lo ya reconocido. La escucha termina solo cuando la usuaria vuelve a presionar el botón (ícono de stop en `Toolbar.tsx::BotonComandoVoz`); recién ahí se envía el texto completo a la API. Mientras escucha, la toolbar muestra la transcripción en vivo. Errores fatales (permiso, sin micrófono, red) cortan sin reintentar.
+
 ### Colaboración en tiempo real (CU10) — backend + frontend implementados
 
 - Librería elegida: **pycrdt + pycrdt-websocket** (paquete `pycrdt-websocket` en PyPI, pero desde la 0.16 el código vive bajo `pycrdt.websocket`, no `pycrdt_websocket`). Es el sucesor directo, activamente mantenido, de `y-py`/`ypy-websocket`: mismo mantenedor y org de GitHub (`y-crdt`, antes `jupyter-server`), `ypy-websocket` está formalmente abandonado y su propio README remite a `pycrdt-websocket`. Verificado al momento de implementar (sep. 2026): `pycrdt` 0.14.5 (ago. 2026) y `pycrdt-websocket` 0.16.4 (jul. 2026), ambos con releases recientes. `pycrdt` es un binding mixto Python/Rust (usa `yrs`, el puerto en Rust de Yjs) — más simple de mantener que el `y-py` 100%-Rust al que reemplaza.

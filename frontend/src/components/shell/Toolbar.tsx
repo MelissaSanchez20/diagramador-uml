@@ -114,6 +114,14 @@ function IconMic() {
   )
 }
 
+function IconStop() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <rect x="3" y="3" width="8" height="8" rx="1.5" fill="currentColor" />
+    </svg>
+  )
+}
+
 const ETIQUETA_CONEXION: Record<EstadoConexion, string> = {
   conectado: 'En vivo',
   conectando: 'Conectando…',
@@ -182,35 +190,45 @@ function IconChat() {
 
 /**
  * CU11 — botón circular de comando por voz. Estados: idle (outline),
- * escuchando (relleno + anillo pulsante) y procesando (disabled). La clase
- * `.tool-btn--icon-circular` es la base compartida que reusará el futuro
- * botón de cámara de CU12 -- mismo tamaño/forma/tratamiento de estados.
+ * escuchando (relleno + anillo pulsante, ícono de stop) y procesando
+ * (disabled). La escucha no se corta sola con los silencios: sigue hasta que
+ * se vuelve a presionar el botón (stop), y recién ahí se envía el comando.
+ * La clase `.tool-btn--icon-circular` es la base compartida con el botón de
+ * cámara de CU12 -- mismo tamaño/forma/tratamiento de estados.
  */
 function BotonComandoVoz({ comandoVoz }: { comandoVoz: ReturnType<typeof useComandoVoz> }) {
-  const { soportado, escuchando, procesando, iniciarEscucha } = comandoVoz
+  const { soportado, escuchando, procesando, transcripcionParcial, alternarEscucha } = comandoVoz
   const titulo = !soportado
     ? 'Tu navegador no soporta reconocimiento de voz'
     : escuchando
-      ? 'Escuchando…'
+      ? 'Detener y enviar el comando'
       : procesando
         ? 'Interpretando el comando…'
         : 'Comando de voz'
+  const textoEnVivo = transcripcionParcial ? `Escuchando: ${transcripcionParcial}` : 'Escuchando…'
 
   return (
-    <button
-      type="button"
-      className={
-        'tool-btn--icon-circular' +
-        (escuchando ? ' tool-btn--icon-circular-activo' : '') +
-        (procesando ? ' tool-btn--icon-circular-procesando' : '')
-      }
-      disabled={!soportado || procesando}
-      title={titulo}
-      aria-label={titulo}
-      onClick={iniciarEscucha}
-    >
-      <IconMic />
-    </button>
+    <>
+      <button
+        type="button"
+        className={
+          'tool-btn--icon-circular' +
+          (escuchando ? ' tool-btn--icon-circular-activo' : '') +
+          (procesando ? ' tool-btn--icon-circular-procesando' : '')
+        }
+        disabled={!soportado || procesando}
+        title={titulo}
+        aria-label={titulo}
+        onClick={alternarEscucha}
+      >
+        {escuchando ? <IconStop /> : <IconMic />}
+      </button>
+      {escuchando && (
+        <span className="app-toolbar__transcripcion-voz" title={textoEnVivo} aria-live="polite">
+          {textoEnVivo}
+        </span>
+      )}
+    </>
   )
 }
 

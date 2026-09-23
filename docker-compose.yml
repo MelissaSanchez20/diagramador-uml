@@ -38,6 +38,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       OPENAI_VISION_MODEL: ${OPENAI_VISION_MODEL:-gpt-4o}
+      OPENAI_VOZ_MODEL: ${OPENAI_VOZ_MODEL:-gpt-4o}
     # UNA sola réplica y un solo worker (ver backend/docker-entrypoint.sh):
     # las salas de colaboración en tiempo real viven en memoria.
 

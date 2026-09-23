@@ -170,6 +170,19 @@
   border-radius: var(--radius-sm);
 }
 
+/* CU11 — transcripción en vivo mientras el micrófono escucha. */
+.app-toolbar__transcripcion-voz {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
 .app-toolbar__input-archivo {
   position: absolute;
   width: 1px;

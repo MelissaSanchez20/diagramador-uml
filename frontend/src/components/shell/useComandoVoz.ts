@@ -12,8 +12,13 @@ import type { useDiagrama } from './useDiagrama'
 interface SpeechRecognitionResultado {
   transcript: string
 }
+interface SpeechRecognitionListaAlternativas {
+  isFinal: boolean
+  [index: number]: SpeechRecognitionResultado
+}
 interface SpeechRecognitionEvento extends Event {
-  results: { [index: number]: { [index: number]: SpeechRecognitionResultado } }
+  resultIndex: number
+  results: { length: number; [index: number]: SpeechRecognitionListaAlternativas }
 }
 interface SpeechRecognitionErrorEvento extends Event {
   error: string
@@ -24,6 +29,8 @@ interface SpeechRecognitionInstancia extends EventTarget {
   interimResults: boolean
   maxAlternatives: number
   start: () => void
+  stop: () => void
+  abort: () => void
   onresult: ((ev: SpeechRecognitionEvento) => void) | null
   onerror: ((ev: SpeechRecognitionErrorEvento) => void) | null
   onend: (() => void) | null
@@ -42,6 +49,16 @@ const MENSAJES_ERROR_RECONOCIMIENTO: Record<string, string> = {
   'service-not-allowed': 'Se necesita permiso de micrófono para usar comandos de voz.',
   'no-speech': 'No se detectó voz. Intenta de nuevo.',
   'audio-capture': 'No se encontró un micrófono disponible.',
+  network: 'Se perdió la conexión con el servicio de reconocimiento de voz.',
+}
+
+/** Errores que el auto-reinicio ya cubre: el navegador corta la sesión tras
+ * un silencio largo aun en modo continuo, pero la escucha tiene que seguir
+ * hasta que la usuaria presione stop. */
+const ERRORES_RECUPERABLES = new Set(['no-speech', 'aborted'])
+
+function unirTexto(...partes: string[]): string {
+  return partes.map((p) => p.trim()).filter(Boolean).join(' ')
 }
 
 function obtenerConstructorReconocimiento(): SpeechRecognitionConstructor | undefined {
@@ -78,8 +95,10 @@ export function useComandoVoz(proyectoId: number, diagrama: Diagrama) {
 
   const soportado = obtenerConstructorReconocimiento() !== undefined
 
-  const confirmarAccion = useCallback((mensaje: string) => {
-    setMensajeConfirmacion(mensaje)
+  // Las advertencias (lo que se descartó o ajustó) solo se muestran; en voz
+  // alta se dice el resumen.
+  const confirmarAccion = useCallback((mensaje: string, advertencias: string[] = []) => {
+    setMensajeConfirmacion([mensaje, ...advertencias].join(' '))
     hablar(mensaje)
   }, [])
 
@@ -89,13 +108,82 @@ export function useComandoVoz(proyectoId: number, diagrama: Diagrama) {
     interpretarComandoVoz(proyectoId, texto)
       .then((resultado) => {
         aplicarAccionVoz(resultado, diagramaRef.current)
-        confirmarAccion(resultado.resumen)
+        confirmarAccion(resultado.resumen, resultado.accion === 'modificar_diagrama' ? resultado.advertencias : [])
       })
       .catch((err) => {
         setError(getApiErrorMessage(err, 'No se pudo interpretar el comando de voz'))
       })
       .finally(() => setProcesando(false))
   }, [proyectoId, confirmarAccion])
+
+  // La escucha es continua hasta que la usuaria presiona stop: el navegador
+  // puede terminar una sesión por su cuenta (silencio largo, red), así que
+  // cada sesión que termina sola se reinicia sobre una instancia nueva y lo
+  // ya confirmado se guarda en `textoAcumuladoRef` para no perderlo.
+  const reconocimientoRef = useRef<SpeechRecognitionInstancia | null>(null)
+  const detenidoPorUsuarioRef = useRef(false)
+  const textoAcumuladoRef = useRef('')
+  const [transcripcionParcial, setTranscripcionParcial] = useState('')
+
+  const iniciarSesion = useCallback(
+    function iniciarSesion(Constructor: SpeechRecognitionConstructor) {
+      const reconocimiento = new Constructor()
+      reconocimiento.lang = 'es-419'
+      reconocimiento.continuous = true
+      reconocimiento.interimResults = true
+      reconocimiento.maxAlternatives = 1
+
+      // Finales confirmados dentro de ESTA sesión del navegador (sus
+      // `results` arrancan de cero en cada reinicio).
+      let finalesSesion = ''
+      let errorFatal = false
+
+      reconocimiento.onresult = (ev) => {
+        let finales = ''
+        let parciales = ''
+        for (let i = 0; i < ev.results.length; i++) {
+          const resultado = ev.results[i]
+          const texto = resultado[0]?.transcript ?? ''
+          if (resultado.isFinal) finales = unirTexto(finales, texto)
+          else parciales = unirTexto(parciales, texto)
+        }
+        finalesSesion = finales
+        setTranscripcionParcial(unirTexto(textoAcumuladoRef.current, finales, parciales))
+      }
+      reconocimiento.onerror = (ev) => {
+        if (ERRORES_RECUPERABLES.has(ev.error)) return
+        errorFatal = true
+        setError(MENSAJES_ERROR_RECONOCIMIENTO[ev.error] ?? 'No se pudo escuchar, intenta de nuevo.')
+      }
+      reconocimiento.onend = () => {
+        if (reconocimientoRef.current !== reconocimiento) return
+        textoAcumuladoRef.current = unirTexto(textoAcumuladoRef.current, finalesSesion)
+
+        if (!detenidoPorUsuarioRef.current && !errorFatal) {
+          iniciarSesion(Constructor)
+          return
+        }
+
+        reconocimientoRef.current = null
+        setEscuchando(false)
+        setTranscripcionParcial('')
+        if (errorFatal) return
+        const texto = textoAcumuladoRef.current
+        if (texto) aplicarAccion(texto)
+        else setError(MENSAJES_ERROR_RECONOCIMIENTO['no-speech'])
+      }
+
+      reconocimientoRef.current = reconocimiento
+      try {
+        reconocimiento.start()
+      } catch {
+        reconocimientoRef.current = null
+        setEscuchando(false)
+        setError('No se pudo iniciar el micrófono, intenta de nuevo.')
+      }
+    },
+    [aplicarAccion],
+  )
 
   const iniciarEscucha = useCallback(() => {
     const Constructor = obtenerConstructorReconocimiento()
@@ -105,26 +193,33 @@ export function useComandoVoz(proyectoId: number, diagrama: Diagrama) {
     }
     setError(null)
     setMensajeConfirmacion(null)
-
-    const reconocimiento = new Constructor()
-    reconocimiento.lang = 'es-419'
-    reconocimiento.continuous = false
-    reconocimiento.interimResults = false
-    reconocimiento.maxAlternatives = 1
-
-    reconocimiento.onresult = (ev) => {
-      const texto = ev.results[0]?.[0]?.transcript?.trim()
-      if (texto) aplicarAccion(texto)
-      else setError('No se pudo escuchar, intenta de nuevo.')
-    }
-    reconocimiento.onerror = (ev) => {
-      setError(MENSAJES_ERROR_RECONOCIMIENTO[ev.error] ?? 'No se pudo escuchar, intenta de nuevo.')
-    }
-    reconocimiento.onend = () => setEscuchando(false)
-
+    detenidoPorUsuarioRef.current = false
+    textoAcumuladoRef.current = ''
+    setTranscripcionParcial('')
     setEscuchando(true)
-    reconocimiento.start()
-  }, [aplicarAccion])
+    iniciarSesion(Constructor)
+  }, [iniciarSesion])
+
+  /** `stop()` y no `abort()`: así el navegador entrega el último resultado
+   * pendiente antes del `onend` que arma y envía el comando completo. */
+  const detenerEscucha = useCallback(() => {
+    detenidoPorUsuarioRef.current = true
+    reconocimientoRef.current?.stop()
+  }, [])
+
+  const alternarEscucha = useCallback(() => {
+    if (reconocimientoRef.current) detenerEscucha()
+    else iniciarEscucha()
+  }, [detenerEscucha, iniciarEscucha])
+
+  // Al salir del editor se corta la escucha sin enviar nada.
+  useEffect(() => {
+    return () => {
+      const reconocimiento = reconocimientoRef.current
+      reconocimientoRef.current = null
+      reconocimiento?.abort()
+    }
+  }, [])
 
   return {
     soportado,
@@ -132,7 +227,10 @@ export function useComandoVoz(proyectoId: number, diagrama: Diagrama) {
     procesando,
     error,
     mensajeConfirmacion,
+    transcripcionParcial,
     iniciarEscucha,
+    detenerEscucha,
+    alternarEscucha,
     cerrarError: () => setError(null),
     cerrarConfirmacion: () => setMensajeConfirmacion(null),
   }

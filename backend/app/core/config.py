@@ -21,8 +21,13 @@ class Settings(BaseSettings):
     # Medido con una imagen real: gpt-4o-mini perdía clases e inventaba
     # relaciones distintas en cada intento; gpt-4o, estable (ver encabezado
     # de `app/services/reconocimiento_foto.py`). Comandos de voz y el agente
-    # siguen con OPENAI_MODEL (texto, no visión), sin encarecerlos.
+    # siguen con sus propios modelos (texto, no visión).
     OPENAI_VISION_MODEL: str = "gpt-4o"
+    # CU11 — modelo aparte para los comandos de voz: un solo comando puede
+    # crear varias clases y deducir tipo/multiplicidad de sus relaciones por
+    # el dominio, algo en lo que gpt-4o-mini se equivoca bastante más. El
+    # agente (CU13) sigue con OPENAI_MODEL.
+    OPENAI_VOZ_MODEL: str = "gpt-4o"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

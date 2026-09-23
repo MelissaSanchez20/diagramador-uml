@@ -298,3 +298,178 @@ class TestErroresGenerales:
             headers=headers(colaborador),
         )
         assert resp.status_code == 200
+
+
+# --- Lenguaje natural: acción compuesta `modificar_diagrama` ----------------
+# `_manejar_modificar_diagrama` es una función pura: se prueba directo contra
+# un `DiagramaIO` armado a mano, sin BD ni OpenAI; y un test pasa por HTTP.
+
+from app.schemas.diagrama import AtributoIO, ClaseIO, DiagramaIO, RelacionIO  # noqa: E402
+from app.services.comandos_voz import ComandoVozInvalidoError, _manejar_modificar_diagrama  # noqa: E402
+
+
+def _atr(nombre, tipo="String"):
+    return {"nombre": nombre, "tipo": tipo, "visibilidad": "PRIVADO"}
+
+
+def _rel(origen, destino, tipo="ASOCIACION", mult_origen="1", mult_destino="0..*", etiqueta=None):
+    return {
+        "razonamiento": "prueba",
+        "tipo": tipo,
+        "clase_origen": origen,
+        "multiplicidad_junto_a_clase_origen": mult_origen,
+        "clase_destino": destino,
+        "multiplicidad_junto_a_clase_destino": mult_destino,
+        "etiqueta": etiqueta,
+    }
+
+
+def _modificar(clases_nuevas=(), existentes_attrs=(), relaciones=()):
+    return {
+        "clases_nuevas": list(clases_nuevas),
+        "atributos_para_clases_existentes": list(existentes_attrs),
+        "relaciones": list(relaciones),
+    }
+
+
+class TestModificarDiagrama:
+    def test_dos_clases_nuevas_relacionadas(self):
+        accion = _manejar_modificar_diagrama(
+            _modificar(
+                [
+                    {"nombre": "Cliente", "atributos": [_atr("nombre"), _atr("correo")]},
+                    {"nombre": "Pedido", "atributos": [_atr("fecha", "Date"), _atr("total", "double")]},
+                ],
+                relaciones=[_rel("Cliente", "Pedido", etiqueta="realiza")],
+            ),
+            DiagramaIO(),
+        )
+        assert [c.nombre for c in accion.clases_nuevas] == ["Cliente", "Pedido"]
+        assert len(accion.clases_nuevas[1].atributos) == 2
+        [relacion] = accion.relaciones
+        assert relacion.origen.id_clase is None and relacion.origen.nombre_clase == "Cliente"
+        assert relacion.destino.id_clase is None and relacion.destino.nombre_clase == "Pedido"
+        assert (relacion.multiplicidad_origen, relacion.multiplicidad_destino) == ("1", "0..*")
+        assert relacion.etiqueta == "realiza"
+        assert accion.advertencias == []
+        assert "Cliente" in accion.resumen and "asociación" in accion.resumen
+
+    def test_relacion_con_clase_existente_ignora_tildes(self):
+        diagrama = DiagramaIO(clases=[ClaseIO(id="c-dir", nombre="Dirección")])
+        accion = _manejar_modificar_diagrama(
+            _modificar([{"nombre": "Persona", "atributos": []}], relaciones=[_rel("Persona", "direccion")]),
+            diagrama,
+        )
+        [relacion] = accion.relaciones
+        assert relacion.destino.id_clase == "c-dir"
+        assert relacion.destino.nombre_clase == "Dirección"
+
+    def test_clase_nueva_que_ya_existe_agrega_atributos(self):
+        diagrama = DiagramaIO(
+            clases=[ClaseIO(id="c-prod", nombre="Producto", atributos=[AtributoIO(id="a1", nombre="precio")])]
+        )
+        accion = _manejar_modificar_diagrama(
+            _modificar([{"nombre": "producto", "atributos": [_atr("precio", "double"), _atr("stock", "int")]}]),
+            diagrama,
+        )
+        assert accion.clases_nuevas == []
+        [grupo] = accion.atributos_agregados
+        assert grupo.id_clase == "c-prod"
+        assert [a.nombre for a in grupo.atributos] == ["stock"]
+        assert any("precio" in a for a in accion.advertencias)
+
+    def test_relacion_a_clase_desconocida_se_descarta(self):
+        accion = _manejar_modificar_diagrama(
+            _modificar([{"nombre": "Pedido", "atributos": []}], relaciones=[_rel("Cliente", "Pedido")]),
+            DiagramaIO(),
+        )
+        assert accion.relaciones == []
+        assert any("Cliente" in a for a in accion.advertencias)
+
+    def test_relacion_ya_existente_o_repetida_se_descarta(self):
+        diagrama = DiagramaIO(
+            clases=[ClaseIO(id="c1", nombre="Cliente"), ClaseIO(id="c2", nombre="Pedido")],
+            relaciones=[RelacionIO(id="r1", id_clase_origen="c1", id_clase_destino="c2", tipo="ASOCIACION")],
+        )
+        accion = _manejar_modificar_diagrama(
+            _modificar(
+                [{"nombre": "Factura", "atributos": []}],
+                relaciones=[
+                    _rel("Pedido", "Cliente"),  # ya existe, con el orden invertido
+                    _rel("Pedido", "Factura"),
+                    _rel("Pedido", "Factura"),  # repetida en el mismo comando
+                ],
+            ),
+            diagrama,
+        )
+        assert len(accion.relaciones) == 1
+        assert accion.relaciones[0].destino.nombre_clase == "Factura"
+
+    def test_herencia_sin_multiplicidad(self):
+        diagrama = DiagramaIO(clases=[ClaseIO(id="c1", nombre="Cliente")])
+        accion = _manejar_modificar_diagrama(
+            _modificar(
+                [{"nombre": "ClienteVip", "atributos": [_atr("descuento", "double")]}],
+                relaciones=[_rel("ClienteVip", "Cliente", tipo="HERENCIA", etiqueta="es un")],
+            ),
+            diagrama,
+        )
+        [relacion] = accion.relaciones
+        assert relacion.tipo.value == "HERENCIA"
+        assert relacion.multiplicidad_origen is None and relacion.multiplicidad_destino is None
+        assert relacion.etiqueta is None
+        assert relacion.destino.id_clase == "c1"
+
+    def test_nombre_en_pascal_case_y_matching_sin_espacios(self):
+        diagrama = DiagramaIO(clases=[ClaseIO(id="c1", nombre="Pedido")])
+        accion = _manejar_modificar_diagrama(
+            _modificar(
+                [{"nombre": "detalle pedido", "atributos": []}],
+                relaciones=[_rel("Pedido", "Detalle Pedido", tipo="COMPOSICION", mult_destino="1..*")],
+            ),
+            diagrama,
+        )
+        assert accion.clases_nuevas[0].nombre == "DetallePedido"
+        [relacion] = accion.relaciones
+        assert relacion.destino.nombre_clase == "DetallePedido"
+        assert relacion.tipo.value == "COMPOSICION"
+
+    def test_multiplicidad_invalida_queda_vacia(self):
+        accion = _manejar_modificar_diagrama(
+            _modificar(
+                [{"nombre": "A", "atributos": []}, {"nombre": "B", "atributos": []}],
+                relaciones=[_rel("A", "B", mult_origen="2..5")],
+            ),
+            DiagramaIO(),
+        )
+        assert accion.relaciones[0].multiplicidad_origen is None
+        assert accion.relaciones[0].multiplicidad_destino == "0..*"
+
+    def test_sin_nada_aplicable_es_error(self):
+        with pytest.raises(ComandoVozInvalidoError):
+            _manejar_modificar_diagrama(_modificar(relaciones=[_rel("X", "Y")]), DiagramaIO())
+
+    def test_por_http_con_clase_existente(self, client, db_session, crear_usuario, crear_proyecto, headers, monkeypatch):
+        admin = crear_usuario()
+        proyecto = crear_proyecto(admin)
+        cliente = _crear_clase(db_session, proyecto, "Cliente")
+        _mock_llamada(
+            monkeypatch,
+            "modificar_diagrama",
+            _modificar(
+                [{"nombre": "Pedido", "atributos": [_atr("total", "double")]}],
+                relaciones=[_rel("Cliente", "Pedido")],
+            ),
+        )
+
+        resp = client.post(
+            f"/proyectos/{proyecto.id}/comandos-voz",
+            json={"texto": "agrega un pedido con total"},
+            headers=headers(admin),
+        )
+        assert resp.status_code == 200
+        datos = resp.json()
+        assert datos["accion"] == "modificar_diagrama"
+        assert datos["clases_nuevas"][0]["nombre"] == "Pedido"
+        assert datos["relaciones"][0]["origen"] == {"id_clase": cliente.id, "nombre_clase": "Cliente"}
+        assert datos["relaciones"][0]["destino"] == {"id_clase": None, "nombre_clase": "Pedido"}

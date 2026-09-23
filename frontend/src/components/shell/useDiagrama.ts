@@ -494,6 +494,36 @@ export function useDiagrama(proyectoId: number) {
     [setNodes, setEdges, guardarAhora, actualizarClase],
   )
 
+  // CU11 — un comando de voz puede crear varias clases, sumar atributos a
+  // otras y relacionarlas: todo entra en un solo setNodes/setEdges + un solo
+  // guardarAhora(), así es un único paso de Ctrl+Z y un solo push a Yjs. Los
+  // lados de cada arista se calculan por posición (construirArista), porque
+  // la voz no elige handles.
+  const agregarLote = useCallback(
+    (clasesNuevas: ClaseUml[], clasesActualizadas: ClaseUml[], relaciones: RelacionUml[]) => {
+      const actualizadasPorId = new Map(clasesActualizadas.map((c) => [c.id, c]))
+      setNodes((nds) => [
+        ...nds.map((n) => {
+          const clase = actualizadasPorId.get(n.id)
+          return { ...n, selected: false, ...(clase ? { data: { ...n.data, clase } } : {}) }
+        }),
+        ...clasesNuevas.map((clase) => ({
+          id: clase.id,
+          type: 'classNode',
+          position: { x: clase.pos_x, y: clase.pos_y },
+          data: { clase, onCambiar: actualizarClase },
+        })),
+      ])
+      const posicionesPorId = new Map<string, PosicionXY>(
+        nodesRef.current.map((n) => [n.id, { x: n.position.x, y: n.position.y }]),
+      )
+      for (const clase of clasesNuevas) posicionesPorId.set(clase.id, { x: clase.pos_x, y: clase.pos_y })
+      setEdges((eds) => [...eds, ...relaciones.map((r) => construirArista(r, posicionesPorId))])
+      guardarAhora()
+    },
+    [setNodes, setEdges, guardarAhora, actualizarClase],
+  )
+
   const crearRelacion = useCallback(
     (conexion: Connection, detalles: DetallesRelacion) => {
       if (!conexion.source || !conexion.target) return
@@ -591,6 +621,7 @@ export function useDiagrama(proyectoId: number) {
     seleccionarClase,
     eliminarClase,
     crearRelacion,
+    agregarLote,
     actualizarRelacion,
     moverPuntoRelacion,
     eliminarRelacion,

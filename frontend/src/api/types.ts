@@ -163,12 +163,39 @@ export type AccionRenombrarClase = {
   resumen: string
 }
 
+/** Extremo de una relación de `AccionModificarDiagrama`: `id_clase` si la
+ * clase ya existe, `null` si es una de las `clases_nuevas` del mismo comando
+ * (se resuelve por `nombre_clase` al aplicarla). */
+export type ExtremoRelacionVoz = {
+  id_clase: string | null
+  nombre_clase: string
+}
+
+/** CU11 — comando en lenguaje natural: varias clases, atributos y
+ * relaciones (con tipo/multiplicidad deducidos) de una sola vez. */
+export type AccionModificarDiagrama = {
+  accion: 'modificar_diagrama'
+  clases_nuevas: { nombre: string; atributos: AtributoNuevo[] }[]
+  atributos_agregados: { id_clase: string; nombre_clase: string; atributos: AtributoNuevo[] }[]
+  relaciones: {
+    origen: ExtremoRelacionVoz
+    destino: ExtremoRelacionVoz
+    tipo: TipoRelacion
+    multiplicidad_origen: string | null
+    multiplicidad_destino: string | null
+    etiqueta: string | null
+  }[]
+  advertencias: string[]
+  resumen: string
+}
+
 export type AccionVoz =
   | AccionCrearClase
   | AccionAgregarAtributo
   | AccionEliminarClase
   | AccionCrearRelacion
   | AccionRenombrarClase
+  | AccionModificarDiagrama
 
 // --- CU13 — agente conversacional ---------------------------------------
 

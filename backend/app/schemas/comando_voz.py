@@ -14,7 +14,9 @@ from app.models.relacion import TipoRelacion
 
 
 class ComandoVozInput(BaseModel):
-    texto: str = Field(min_length=1, max_length=500)
+    # 2000 y no 500: la escucha continua (CU11) permite dictar varias clases y
+    # sus relaciones en un solo comando.
+    texto: str = Field(min_length=1, max_length=2000)
 
 
 class AtributoNuevoIO(BaseModel):
@@ -57,6 +59,50 @@ class AccionCrearRelacion(BaseModel):
     resumen: str
 
 
+class ClaseNuevaIO(BaseModel):
+    nombre: str = Field(min_length=1, max_length=100)
+    atributos: list[AtributoNuevoIO] = []
+
+
+class AtributosAgregadosIO(BaseModel):
+    id_clase: str
+    nombre_clase: str
+    atributos: list[AtributoNuevoIO]
+
+
+class ExtremoRelacionIO(BaseModel):
+    """Un extremo de una relación de `AccionModificarDiagrama`: `id_clase` si
+    la clase ya existe en el diagrama, o `None` si es una de las
+    `clases_nuevas` del mismo comando -- su id todavía no existe (lo genera el
+    frontend), así que el frontend la resuelve por `nombre_clase`."""
+
+    id_clase: str | None = None
+    nombre_clase: str
+
+
+class RelacionNuevaIO(BaseModel):
+    origen: ExtremoRelacionIO
+    destino: ExtremoRelacionIO
+    tipo: TipoRelacion
+    multiplicidad_origen: str | None = None
+    multiplicidad_destino: str | None = None
+    etiqueta: str | None = None
+
+
+class AccionModificarDiagrama(BaseModel):
+    """CU11 — un comando de voz en lenguaje natural puede crear varias clases,
+    agregar atributos a clases existentes y relacionarlas (con tipo y
+    multiplicidad deducidos) de una sola vez. `advertencias` lista lo que se
+    descartó o ajustó, sin hacer fallar el comando entero."""
+
+    accion: Literal["modificar_diagrama"] = "modificar_diagrama"
+    clases_nuevas: list[ClaseNuevaIO] = []
+    atributos_agregados: list[AtributosAgregadosIO] = []
+    relaciones: list[RelacionNuevaIO] = []
+    advertencias: list[str] = []
+    resumen: str
+
+
 class AccionRenombrarClase(BaseModel):
     accion: Literal["renombrar_clase"] = "renombrar_clase"
     id_clase: str
@@ -72,6 +118,7 @@ AccionVoz = Annotated[
         AccionEliminarClase,
         AccionCrearRelacion,
         AccionRenombrarClase,
+        AccionModificarDiagrama,
     ],
     Field(discriminator="accion"),
 ]

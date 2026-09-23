@@ -31,31 +31,11 @@ from app.services.comandos_voz import (
     ComandoVozNoDisponibleError,
     construir_tools,
     resolver_accion,
+    resumen_diagrama,
 )
 from app.services.diagrama import MULTIPLICIDADES_VALIDAS, cargar_diagrama
 
 _ROL_OPENAI = {"usuario": "user", "agente": "assistant"}
-
-
-def _resumen_diagrama(diagrama: DiagramaIO) -> str:
-    if not diagrama.clases:
-        return "(el diagrama está vacío todavía, no tiene ninguna clase)"
-
-    nombres_por_id = {c.id: c.nombre for c in diagrama.clases}
-    lineas = []
-    for c in diagrama.clases:
-        atributos = ", ".join(f"{a.nombre}: {a.tipo or 'sin tipo'}" for a in c.atributos) or "sin atributos"
-        lineas.append(f'- Clase "{c.nombre}" ({atributos})')
-
-    if diagrama.relaciones:
-        lineas.append("Relaciones:")
-        for r in diagrama.relaciones:
-            origen = nombres_por_id.get(r.id_clase_origen, "?")
-            destino = nombres_por_id.get(r.id_clase_destino, "?")
-            mult = f" ({r.multiplicidad_origen or '?'} - {r.multiplicidad_destino or '?'})"
-            lineas.append(f'- "{origen}" --{r.tipo.value.lower()}--> "{destino}"{mult}')
-
-    return "\n".join(lineas)
 
 
 def _prompt_sistema_agente(diagrama: DiagramaIO) -> str:
@@ -71,7 +51,7 @@ def _prompt_sistema_agente(diagrama: DiagramaIO) -> str:
         "sobre conceptos de UML en general (herencia, agregación vs composición, "
         "multiplicidad, etc.), funcionando como guía/tutor dentro de la "
         "herramienta.\n\n"
-        f"Estado ACTUAL del diagrama de este proyecto:\n{_resumen_diagrama(diagrama)}\n\n"
+        f"Estado ACTUAL del diagrama de este proyecto:\n{resumen_diagrama(diagrama)}\n\n"
         "Tenés disponibles funciones para ejecutar 5 acciones de edición: crear "
         "una clase (con atributos opcionales), agregar un atributo a una clase "
         "existente, eliminar una clase, crear una relación entre dos clases "
